@@ -1,5 +1,6 @@
 package orui
 
+import "core:log"
 import "core:math"
 import "core:strings"
 import "core:unicode"
@@ -261,22 +262,45 @@ extend_text_selection :: proc(
 
 @(private)
 insert_bytes :: proc(builder: ^strings.Builder, position: int, text: string) -> int {
-	if position < 0 || position > len(builder.buf) {
+	if position < 0 || position > len(builder.buf) || len(text) == 0 {
 		return 0
 	}
 
-	if ok, _ := inject_at(&builder.buf, position, text); !ok {
-		n := cap(builder.buf) - len(builder.buf)
-		for is_continuation_byte(text[n]) {
-			n -= 1
-		}
-		if ok2, _ := inject_at(&builder.buf, position, text[:n]); !ok2 {
-			n = 0
-		}
-		return n
+	// Builder storage may have no spare capacity (notably for a freshly
+	// initialized search field). Append first so the Builder can grow, then
+	// shift the existing suffix into the newly available space. The old
+	// inject_at fallback used the spare capacity as an index into `text`, which
+	// could read past the typed string and crash while entering text.
+	old_length := len(builder.buf)
+	if current_context.input_trace {
+		log.infof(
+			"[orui text] insert begin position=%v text_bytes=%v len=%v cap=%v",
+			position,
+			len(text),
+			old_length,
+			cap(builder.buf),
+		)
 	}
-
-	return len(text)
+	strings.write_string(builder, text)
+	inserted := len(builder.buf) - old_length
+	if current_context.input_trace {
+		log.infof(
+			"[orui text] insert appended inserted=%v len=%v cap=%v",
+			inserted,
+			len(builder.buf),
+			cap(builder.buf),
+		)
+	}
+	if inserted <= 0 {
+		return 0
+	}
+	for i := old_length - 1; i >= position; i -= 1 {
+		builder.buf[i + inserted] = builder.buf[i]
+	}
+	for i := 0; i < inserted; i += 1 {
+		builder.buf[position + i] = text[i]
+	}
+	return inserted
 }
 
 @(private)

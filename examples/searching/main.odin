@@ -2,6 +2,8 @@ package new_features
 
 import orui "../../src"
 import "core:fmt"
+import "core:log"
+import "core:os"
 import "core:path/filepath"
 import "core:strings"
 import rl "vendor:raylib"
@@ -59,6 +61,14 @@ search_filter :: proc(character: rune) -> bool {
 }
 
 main :: proc() {
+	// Keep framework input traces available after a GUI process crashes.
+	logh, logh_err := os.open("log.txt", (os.O_CREATE | os.O_TRUNC | os.O_RDWR))
+	if logh_err == os.ERROR_NONE {
+		os.stdout = logh
+		os.stderr = logh
+	}
+	context.logger = logh_err == os.ERROR_NONE ? log.create_file_logger(logh, allocator = context.allocator) : log.create_console_logger(allocator = context.allocator)
+
 	rl.SetConfigFlags({.WINDOW_RESIZABLE, .VSYNC_HINT, .MSAA_4X_HINT})
 	rl.InitWindow(1280, 800, "orui - New Features")
 	defer rl.CloseWindow()
@@ -94,6 +104,7 @@ main :: proc() {
 	menu_open := false
 	modal_open := false
 	status := "Touch, mouse, keyboard, or controller input"
+	current_cursor := rl.MouseCursor.DEFAULT
 
 	for !rl.WindowShouldClose() {
 		rl.BeginDrawing()
@@ -105,6 +116,13 @@ main :: proc() {
 		// backend can populate the same InputState before this call.
 		input := orui.input_from_raylib()
 		orui.begin_responsive_with_input(ctx, width, height, input)
+
+		cursor_hint := orui.cursor(ctx)
+		next_cursor := cursor_hint == .Unspecified ? rl.MouseCursor.DEFAULT : rl.MouseCursor(cursor_hint)
+		if next_cursor != current_cursor {
+			rl.SetMouseCursor(next_cursor)
+			current_cursor = next_cursor
+		}
 
 		query := strings.to_string(search)
 		visible_items: [256]int

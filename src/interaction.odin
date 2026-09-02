@@ -1,5 +1,6 @@
 package orui
 
+import "core:log"
 import "core:math"
 import "core:strings"
 import "core:unicode/utf8"
@@ -118,9 +119,15 @@ VirtualTable :: struct {
 // editing. Entries larger than TEXT_UNDO_BYTES are not recorded.
 @(private)
 text_history :: proc(ctx: ^Context, id: Id) -> ^TextHistory {
+	if ctx.input_trace {
+		log.infof("[orui text] history scan begin id=%v slots=%v", id, len(ctx.text_histories))
+	}
 	free_slot: ^TextHistory = nil
 	for i in 0 ..< len(ctx.text_histories) {
 		history := &ctx.text_histories[i]
+		if ctx.input_trace && i == 0 {
+			log.infof("[orui text] history slot zero address reached id=%v", id)
+		}
 		if history.id == id {
 			return history
 		}
@@ -129,7 +136,16 @@ text_history :: proc(ctx: ^Context, id: Id) -> ^TextHistory {
 		}
 	}
 	if free_slot != nil {
-		free_slot^ = {id = id}
+		if ctx.input_trace {
+			log.infof("[orui text] history assign free slot id=%v", id)
+		}
+		// Do not assign `{id = id}` to the whole history here. TextHistory
+		// contains two large fixed snapshot arrays, and that struct literal
+		// creates a large temporary on the stack during the first edit.
+		free_slot.id = id
+	}
+	if ctx.input_trace {
+		log.infof("[orui text] history scan end id=%v found=%v", id, free_slot != nil)
 	}
 	return free_slot
 }
@@ -153,6 +169,9 @@ copy_text_snapshot :: proc(snapshot: ^TextEditSnapshot, element: ^Element, ctx: 
 
 @(private)
 record_text_edit :: proc(ctx: ^Context, element: ^Element) {
+	if ctx.input_trace {
+		log.infof("[orui text] history lookup id=%v", element.id)
+	}
 	history := text_history(ctx, element.id)
 	if history == nil || element.text_input == nil {
 		return
@@ -163,8 +182,17 @@ record_text_edit :: proc(ctx: ^Context, element: ^Element) {
 		}
 		history.undo_count -= 1
 	}
+	if ctx.input_trace {
+		log.infof("[orui text] snapshot begin id=%v undo_count=%v len=%v", element.id, history.undo_count, len(element.text_input.buf))
+	}
 	if !copy_text_snapshot(&history.undo[history.undo_count], element, ctx) {
+		if ctx.input_trace {
+			log.infof("[orui text] snapshot skipped id=%v", element.id)
+		}
 		return
+	}
+	if ctx.input_trace {
+		log.infof("[orui text] snapshot end id=%v", element.id)
 	}
 	history.undo_count += 1
 	history.redo_count = 0

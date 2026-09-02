@@ -168,6 +168,11 @@ Call `set_focus(ctx, id)` or `activate(ctx, id)` before the frame to control
 focus or trigger a widget programmatically. `shortcut_pressed(key)` and
 `shortcut_down(key)` expose the current keyboard snapshot.
 
+Text-input tracing is enabled after `init` and writes through the current Odin
+logger. Use `set_input_trace(ctx, false)` to disable it. The trace records the
+focused element, caret, builder length/capacity, character, and each insertion
+stage.
+
 ## Input and controller support
 
 orui represents input as an `InputState` snapshot. The normal `begin` and

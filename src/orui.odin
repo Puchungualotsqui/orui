@@ -2,6 +2,7 @@ package orui
 
 import "base:intrinsics"
 import "base:runtime"
+import "core:log"
 import "core:mem"
 import rl "vendor:raylib"
 
@@ -99,12 +100,16 @@ Context :: struct {
 	text_click_position:   rl.Vector2,
 	text_click_count:      int,
 	text_histories:        [MAX_TEXT_HISTORIES]TextHistory,
+	// Text input tracing is enabled by default to make backend/input failures
+	// diagnosable. Applications can disable it with set_input_trace.
+	input_trace:           bool,
 }
 
 init :: proc(ctx: ^Context) {
 	ctx.scale = 1
 	ctx.theme = default_theme()
 	ctx.time = 0
+	ctx.input_trace = true
 	for i in 0 ..< 2 {
 		ctx.arena_buffer[i] = make([]byte, DEFAULT_ARENA_CAPACITY)
 		mem.arena_init(&ctx.arena[i], ctx.arena_buffer[i])
@@ -219,6 +224,14 @@ _begin :: proc(ctx: ^Context, width, height: f32, input: InputState, scale: f32,
 	current_context = ctx
 	ctx.input = input
 	ctx.scale = scale
+	if ctx.input_trace && (input.character_count > 0 || input.mouse_left_pressed) {
+		log.infof(
+			"[orui input] begin frame=%v chars=%v mouse_pressed=%v",
+			ctx.frame + 1,
+			input.character_count,
+			input.mouse_left_pressed,
+		)
+	}
 	ctx.activated_id = ctx.requested_activation_id
 	ctx.requested_activation_id = 0
 	if ctx.requested_focus_id != 0 {

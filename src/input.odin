@@ -1,6 +1,7 @@
 package orui
 
 import "core:c"
+import "core:log"
 
 import "core:math/linalg"
 import "core:strings"
@@ -307,6 +308,14 @@ handle_input_state :: proc(ctx: ^Context) {
 			   element.cursor != .Inherit &&
 			   element.cursor != .Unspecified {
 				ctx.pointer_cursor = element.cursor
+				if ctx.input_trace && (pressed || released) {
+					log.infof(
+						"[orui cursor] hit element_id=%v cursor=%v block=%v",
+						element.id,
+						element.cursor,
+						element.block,
+					)
+				}
 			}
 
 			already_active := false
@@ -376,6 +385,18 @@ handle_input_state :: proc(ctx: ^Context) {
 		update_text_drag_selection(ctx, el, position)
 	}
 
+	if ctx.input_trace && (pressed || released) {
+		log.infof(
+			"[orui cursor] pointer pressed=%v released=%v position=(%.1f, %.1f) cursor=%v focus_id=%v",
+			pressed,
+			released,
+			position.x,
+			position.y,
+			ctx.pointer_cursor,
+			ctx.focus_id,
+		)
+	}
+
 	if released {
 		ctx.selecting = false
 		if was_captured {
@@ -392,6 +413,16 @@ handle_input_state :: proc(ctx: ^Context) {
 	// declared.
 	update_scroll_physics(ctx, elements)
 	handle_focus_navigation(ctx, elements)
+	if ctx.input_trace && ctx.input.character_count > 0 {
+		log.infof(
+			"[orui input] dispatch frame=%v focus_index=%v focus_id=%v chars=%v caret=%v",
+			ctx.frame,
+			ctx.focus,
+			ctx.focus_id,
+			ctx.input.character_count,
+			ctx.caret_index,
+		)
+	}
 	handle_keyboard_input(ctx)
 }
 
@@ -444,7 +475,12 @@ handle_focus_navigation :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element)
 		}
 		if direction != 0 {
 			current_index, found := element_index_by_id(ctx, previous_buffer(ctx), ctx.focus_id)
-			if found && elements[current_index].adjustable {
+			// Text fields own arrow keys for caret movement. In particular,
+			// do not move focus away from a single-line input on Up/Down;
+			// handle_keyboard_input will consume the keys below.
+			if found && elements[current_index].editable {
+				// Leave navigation_direction at zero for text editing.
+			} else if found && elements[current_index].adjustable {
 				ctx.navigation_direction = direction
 			} else {
 				move_focus_direction(ctx, elements, direction)
@@ -642,14 +678,38 @@ update_text_drag_selection :: proc(ctx: ^Context, element: ^Element, position: r
 
 @(private)
 insert_input_character :: proc(ctx: ^Context, element: ^Element, char: rune) -> bool {
+	if ctx.input_trace {
+		input_length := element.text_input != nil ? len(element.text_input.buf) : -1
+		log.infof(
+			"[orui text] character begin id=%v rune=%v codepoint=%v caret=%v len=%v",
+			element.id,
+			char,
+			int(char),
+			ctx.caret_index,
+			input_length,
+		)
+	}
+	if element.text_input == nil {
+		log.errorf("[orui text] character aborted id=%v: text_input builder is nil", element.id)
+		return false
+	}
 	if char == '\r' {
 		return true
 	}
 	if char == '\n' && element.overflow != .Wrap {
 		return false
 	}
-	if char != '\n' && element.text_filter != nil && !element.text_filter(char) {
-		return false
+	if char != '\n' && element.text_filter != nil {
+		if ctx.input_trace {
+			log.infof("[orui text] filter begin id=%v codepoint=%v", element.id, int(char))
+		}
+		accepted := element.text_filter(char)
+		if ctx.input_trace {
+			log.infof("[orui text] filter end id=%v accepted=%v", element.id, accepted)
+		}
+		if !accepted {
+			return false
+		}
 	}
 	if element.max_length > 0 {
 		current_length := rune_count(element.text)
@@ -661,7 +721,13 @@ insert_input_character :: proc(ctx: ^Context, element: ^Element, char: rune) -> 
 			return false
 		}
 	}
-		record_text_edit(ctx, element)
+	if ctx.input_trace {
+		log.infof("[orui text] history begin id=%v", element.id)
+	}
+	record_text_edit(ctx, element)
+	if ctx.input_trace {
+		log.infof("[orui text] history end id=%v", element.id)
+	}
 	if has_text_selection(ctx) {
 		ctx.caret_index = delete_text_selection(ctx, element)
 	}
@@ -673,6 +739,15 @@ insert_input_character :: proc(ctx: ^Context, element: ^Element, char: rune) -> 
 	)
 	element.text = strings.to_string(element.text_input^)
 	set_caret_index(ctx, element, ctx.caret_index + bytes_inserted)
+	if ctx.input_trace {
+		log.infof(
+			"[orui text] character end id=%v inserted=%v caret=%v len=%v",
+			element.id,
+			bytes_inserted,
+			ctx.caret_index,
+			len(element.text_input.buf),
+		)
+	}
 	return bytes_inserted > 0
 }
 
@@ -687,6 +762,21 @@ handle_keyboard_input :: proc(ctx: ^Context) {
 			clear_focus(ctx)
 		} else if element.editable {
 			text_input := element.text_input
+			if ctx.input_trace && ctx.input.character_count > 0 {
+				buffer_length := text_input != nil ? len(text_input.buf) : -1
+				buffer_capacity := text_input != nil ? cap(text_input.buf) : -1
+				log.infof(
+					"[orui text] keyboard focus=%v id=%v editable=%v input_nil=%v chars=%v caret=%v len=%v cap=%v",
+					ctx.focus,
+					element.id,
+					element.editable,
+					text_input == nil,
+					ctx.input.character_count,
+					ctx.caret_index,
+					buffer_length,
+					buffer_capacity,
+				)
+			}
 			ctrl_down := key_down(ctx, .LEFT_CONTROL) || key_down(ctx, .RIGHT_CONTROL)
 			cmd_down := key_down(ctx, .LEFT_SUPER) || key_down(ctx, .RIGHT_SUPER)
 			shift_down := key_down(ctx, .LEFT_SHIFT) || key_down(ctx, .RIGHT_SHIFT)

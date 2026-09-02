@@ -272,6 +272,12 @@ set_focus_string :: proc(ctx: ^Context, id: string) {
 	set_focus(ctx, to_id(id))
 }
 
+// Enables or disables framework input tracing. When enabled, text-editing
+// stages are written through Odin's current context logger.
+set_input_trace :: proc(ctx: ^Context, enabled: bool) {
+	ctx.input_trace = enabled
+}
+
 activate :: proc(ctx: ^Context, id: Id) {
 	ctx.requested_activation_id = id
 	ctx.activated_id = id

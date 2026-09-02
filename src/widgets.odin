@@ -1,5 +1,6 @@
 package orui
 
+import "core:log"
 import "core:strings"
 import rl "vendor:raylib"
 
@@ -61,6 +62,20 @@ text_input :: proc(
 ) -> bool {
 	ctx := current_context
 	c := config
+	if ctx.input_trace {
+		log.infof(
+			"[orui text] widget begin id=%v builder_nil=%v len=%v cap=%v focus_id=%v",
+			id,
+			text == nil,
+			text != nil ? len(text.buf) : -1,
+			text != nil ? cap(text.buf) : -1,
+			ctx.focus_id,
+		)
+	}
+	if text == nil {
+		log.errorf("[orui text] widget aborted id=%v: text_input builder is nil", id)
+		return false
+	}
 	c.style = c.style == .None ? .Text_Input : c.style
 	if c.height.type == .Fit {
 		c.height = fixed(max(ctx.theme.metrics.control_height, ctx.theme.metrics.touch_target))

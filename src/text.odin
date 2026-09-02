@@ -801,6 +801,9 @@ render_placeholder :: proc(ctx: ^Context, element: ^Element) {
 		element.color = {old_color.r, old_color.g, old_color.b, old_color.a / 2}
 	}
 	_render_text_line(ctx, element, element.placeholder, 0, len(element.placeholder), element._text_width, x, y, letter_spacing, inner_width)
+	// An empty input still needs a caret before its first character, even while
+	// its placeholder is being displayed.
+	render_caret(ctx, element, "", 0, 0, 0, x, y, letter_spacing, inner_width)
 	element.color = old_color
 }
 
@@ -959,7 +962,10 @@ render_caret :: proc(
 	letter_spacing: f32,
 	inner_width: f32,
 ) {
-	if current_context.focus_id != element.id || current_context.caret_index == -1 {
+	if current_context.focus_id != element.id ||
+	   !element.editable ||
+	   element.text_input == nil ||
+	   current_context.caret_index == -1 {
 		return
 	}
 
