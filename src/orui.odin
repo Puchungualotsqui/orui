@@ -7,6 +7,10 @@ import rl "vendor:raylib"
 
 MAX_ELEMENTS :: 8192
 MAX_COMMANDS :: 8192
+MAX_POINTERS :: 8
+MAX_OVERLAYS :: 16
+MAX_TEXT_HISTORIES :: 64
+TEXT_UNDO_BYTES :: 8192
 DEFAULT_ARENA_CAPACITY :: 16 * mem.Megabyte
 
 when ODIN_OS == .Darwin {
@@ -54,6 +58,10 @@ Context :: struct {
 	input:                 InputState,
 	pointer_capture:       i32,
 	pointer_capture_id:    Id,
+	pointer_capture_kind:  PointerKind,
+	pointer_down_position: rl.Vector2,
+	pointer_last_position: rl.Vector2,
+	pointer_dragging:      bool,
 	pointer_blocker_id:    Id,
 	pointer_cursor:        CursorHint,
 	hover:                 [2]IdBuffer,
@@ -71,6 +79,12 @@ Context :: struct {
 	scale:                 f32,
 	theme:                 Theme,
 
+	// transient overlays and focus scopes
+	overlay_count:         int,
+	overlays:              [MAX_OVERLAYS]OverlayState,
+	active_overlay_id:     Id,
+	overlay_previous_focus: Id,
+
 	// text input
 	prev_focus_id:         Id,
 	caret_index:           int,
@@ -84,11 +98,13 @@ Context :: struct {
 	text_click_time:       f64,
 	text_click_position:   rl.Vector2,
 	text_click_count:      int,
+	text_histories:        [MAX_TEXT_HISTORIES]TextHistory,
 }
 
 init :: proc(ctx: ^Context) {
 	ctx.scale = 1
 	ctx.theme = default_theme()
+	ctx.time = 0
 	for i in 0 ..< 2 {
 		ctx.arena_buffer[i] = make([]byte, DEFAULT_ARENA_CAPACITY)
 		mem.arena_init(&ctx.arena[i], ctx.arena_buffer[i])
@@ -219,6 +235,9 @@ _begin :: proc(ctx: ^Context, width, height: f32, input: InputState, scale: f32,
 	ctx.grid_states[i] = make([dynamic]GridState, ctx.allocator[i])
 	ctx.animation_states[i] = make(map[AnimationId]AnimationState, 256, ctx.allocator[i])
 
+	ctx.dt = dt > 0 ? dt : rl.GetFrameTime()
+	ctx.time += f64(ctx.dt)
+	sync_overlay_scope(ctx)
 	handle_input_state(ctx)
 
 	elements := &ctx.elements[current_buffer(ctx)]
@@ -245,7 +264,6 @@ _begin :: proc(ctx: ^Context, width, height: f32, input: InputState, scale: f32,
 	ctx.previous = 0
 	ctx.parent = 0
 
-	ctx.dt = dt > 0 ? dt : rl.GetFrameTime()
 	ctx.caret_time += ctx.dt
 }
 
@@ -450,9 +468,10 @@ measure_text :: proc(ctx: ^Context, element: ^Element) {
 		return
 	}
 
+	measure_text_value := len(element.text) == 0 ? element.placeholder : element.text
 	element._text_width = measure_text_width(
 		ctx,
-		element.text,
+		measure_text_value,
 		element.font,
 		element.font_size,
 		element.letter_spacing,
@@ -460,7 +479,7 @@ measure_text :: proc(ctx: ^Context, element: ^Element) {
 	element._line_height = measure_text_height(element.font_size, element.line_height)
 
 	if element.overflow == .Visible {
-		if len(element.text) > 0 {
+		if len(measure_text_value) > 0 {
 			element._line_count = 1
 		}
 	}

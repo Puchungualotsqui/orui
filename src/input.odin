@@ -60,6 +60,8 @@ InputState :: struct {
 	character_count:      int,
 	clipboard_text:       string,
 	controllers:          [MAX_GAMEPADS]ControllerInput,
+	pointer_count:        int,
+	pointers:             [MAX_POINTERS]PointerInput
 }
 
 input_from_raylib :: proc() -> InputState {
@@ -69,12 +71,53 @@ input_from_raylib :: proc() -> InputState {
 	input.mouse_left_pressed = rl.IsMouseButtonPressed(.LEFT)
 	input.mouse_left_released = rl.IsMouseButtonReleased(.LEFT)
 	input.mouse_wheel = rl.GetMouseWheelMoveV()
+	input.pointer_count = 1
+	touch_count := rl.GetTouchPointCount()
+	touch_active := touch_count > 0 || raylib_touch_was_down
+	if touch_active {
+		touch_position := input.mouse_position
+		if touch_count > 0 {
+			touch_position = rl.GetTouchPosition(0)
+		}
+		input.pointers[0] = {
+			id = 0,
+			kind = .Touch,
+			position = touch_position,
+			down = touch_count > 0,
+			pressed = touch_count > 0 && !raylib_touch_was_down,
+			released = touch_count == 0 && raylib_touch_was_down,
+		}
+		input.pointer_count = int(min(touch_count, i32(MAX_POINTERS)))
+		for i in 1 ..< input.pointer_count {
+			input.pointers[i] = {
+				id = i,
+				kind = .Touch,
+				position = rl.GetTouchPosition(i32(i)),
+				down = true,
+			}
+		}
+		raylib_touch_was_down = touch_count > 0
+	} else {
+		input.pointers[0] = {
+			id = 0,
+			kind = .Mouse,
+			position = input.mouse_position,
+			down = input.mouse_left_down,
+			pressed = input.mouse_left_pressed,
+			released = input.mouse_left_released,
+		}
+	}
 
 	for i in 0 ..< MAX_INPUT_KEYS {
 		key := rl.KeyboardKey(i)
 		input.keys_down[i] = rl.IsKeyDown(key)
 		input.keys_pressed[i] = rl.IsKeyPressed(key)
 		input.keys_repeated[i] = rl.IsKeyPressedRepeat(key)
+	}
+
+	for char := rl.GetCharPressed(); char != 0 && input.character_count < len(input.characters); char = rl.GetCharPressed() {
+		input.characters[input.character_count] = char
+		input.character_count += 1
 	}
 
 	for gamepad_index in 0 ..< MAX_GAMEPADS {
@@ -121,6 +164,9 @@ controller_axis :: proc(input: InputState, axis: ControllerAxis, gamepad := 0) -
 TEXT_MULTI_CLICK_TIME: f64 : 0.5
 TEXT_MULTI_CLICK_DISTANCE: f32 : 6
 
+@(thread_local)
+raylib_touch_was_down: bool
+
 @(private)
 handle_input_state :: proc(ctx: ^Context) {
 	current := current_buffer(ctx)
@@ -132,11 +178,24 @@ handle_input_state :: proc(ctx: ^Context) {
 
 	sync_focus_element(ctx)
 
+	// The primary pointer preserves the existing mouse API while allowing
+	// applications to provide touch/pen input through InputState.
+	if ctx.input.pointer_count > 0 {
+		pointer := &ctx.input.pointers[0]
+		ctx.input.mouse_position = pointer.position
+		ctx.input.mouse_left_down = pointer.down
+		ctx.input.mouse_left_pressed = pointer.pressed
+		ctx.input.mouse_left_released = pointer.released
+	}
 	position := ctx.input.mouse_position
 	mouse_down := ctx.input.mouse_left_down
 	pressed := ctx.input.mouse_left_pressed
 	released := ctx.input.mouse_left_released
 	scroll := ctx.input.mouse_wheel
+	pointer_kind := PointerKind.Mouse
+	if ctx.input.pointer_count > 0 {
+		pointer_kind = ctx.input.pointers[0].kind
+	}
 
 	ctx.prev_focus_id = ctx.focus_id
 	ctx.hover[current].count = 0
@@ -144,9 +203,11 @@ handle_input_state :: proc(ctx: ^Context) {
 	ctx.pointer_blocker_id = 0
 	ctx.pointer_cursor = .Unspecified
 
+	was_captured := ctx.pointer_capture != 0
+	captured_index := ctx.pointer_capture
 	if released {
-		ctx.pointer_capture = 0
-		ctx.pointer_capture_id = 0
+		// Keep the capture alive through this release so click/drag state is
+		// delivered to the owner even when the pointer left its bounds.
 		if ctx.focus != 0 && ctx.caret_index == -1 {
 			ctx.caret_index = text_caret_from_point(ctx, &elements[ctx.focus], position)
 		}
@@ -166,7 +227,7 @@ handle_input_state :: proc(ctx: ^Context) {
 	for i := ctx.sorted_count - 1; i >= 0; i -= 1 {
 		element := &elements[ctx.sorted[i]]
 
-		if ctx.pointer_capture != 0 && ctx.pointer_capture != ctx.sorted[i] {
+		if captured_index != 0 && captured_index != ctx.sorted[i] {
 			continue
 		}
 
@@ -179,39 +240,62 @@ handle_input_state :: proc(ctx: ^Context) {
 			ctx.pointer_cursor = element.cursor
 		}
 
-		if !point_in_element(position, element) {
+		if captured_index == 0 && !point_in_element(position, element) {
 			continue
 		}
 
 		if !scroll_consumed {
 			if scroll.x != 0 && scrolls_x(element) {
-				scroll_offset := get_scroll_offset(element)
-				old := scroll_offset.x
-				scroll_offset.x -= scroll.x * SCROLL_FACTOR
+				old := get_scroll_offset(element).x
+				element._scroll_target.x = old - scroll.x * SCROLL_FACTOR
 				min_x, max_x := scroll_bounds_x(element)
-				scroll_offset.x = clamp(scroll_offset.x, min_x, max_x)
-				// don't consume the scroll if it didn't change
-				if scroll_offset.x != old {
-					element.scroll.offset = scroll_offset
-					if element.block == .True {
-						scroll_consumed = true
-					}
+				element._scroll_target.x = clamp(element._scroll_target.x, min_x, max_x)
+				if element.block == .True && element._scroll_target.x != old {
+					scroll_consumed = true
 				}
 			}
 			if scroll.y != 0 && scrolls_y(element) {
-				scroll_offset := get_scroll_offset(element)
-				old := scroll_offset.y
-				scroll_offset.y -= scroll.y * SCROLL_FACTOR
+				old := get_scroll_offset(element).y
+				element._scroll_target.y = old - scroll.y * SCROLL_FACTOR
 				min_y, max_y := scroll_bounds_y(element)
-				scroll_offset.y = clamp(scroll_offset.y, min_y, max_y)
-				// don't consume the scroll if it didn't change
-				if scroll_offset.y != old {
-					element.scroll.offset = scroll_offset
-					if element.block == .True {
-						scroll_consumed = true
-					}
+				element._scroll_target.y = clamp(element._scroll_target.y, min_y, max_y)
+				if element.block == .True && element._scroll_target.y != old {
+					scroll_consumed = true
 				}
 			}
+		}
+
+		if pointer_kind == .Touch && (scrolls_x(element) || scrolls_y(element)) {
+			if pressed {
+				ctx.pointer_dragging = false
+				ctx.pointer_down_position = position
+				element._scroll_dragging = true
+				element._scroll_last_pointer = position
+				ctx.pointer_capture = ctx.sorted[i]
+				ctx.pointer_capture_id = element.id
+				ctx.pointer_capture_kind = .Touch
+			}
+			if element._scroll_dragging && mouse_down {
+				if linalg.distance(position, ctx.pointer_down_position) >= 6 {
+					ctx.pointer_dragging = true
+				}
+				if !ctx.pointer_dragging {
+					continue
+				}
+				delta := position - element._scroll_last_pointer
+				scroll_offset := get_scroll_offset(element)
+				if scrolls_x(element) { scroll_offset.x -= delta.x }
+				if scrolls_y(element) { scroll_offset.y -= delta.y }
+				element._scroll_velocity = -delta / max(ctx.dt, 0.001)
+				min_x, max_x := scroll_bounds_x(element)
+				min_y, max_y := scroll_bounds_y(element)
+				scroll_offset.x = clamp(scroll_offset.x, min_x, max_x)
+				scroll_offset.y = clamp(scroll_offset.y, min_y, max_y)
+				element.scroll.offset = scroll_offset
+				element._scroll_target = scroll_offset
+				element._scroll_last_pointer = position
+			}
+			if released { element._scroll_dragging = false }
 		}
 
 		if !click_consumed {
@@ -294,14 +378,41 @@ handle_input_state :: proc(ctx: ^Context) {
 
 	if released {
 		ctx.selecting = false
+		if was_captured {
+			ctx.pointer_capture = 0
+			ctx.pointer_capture_id = 0
+			ctx.pointer_capture_kind = .Mouse
+		}
+	} else if !mouse_down {
+		ctx.pointer_dragging = false
 	}
 
+	// Apply wheel targets and touch drag state before focus/navigation consumers
+	// read the frame. The current tree will copy these runtime values when it is
+	// declared.
+	update_scroll_physics(ctx, elements)
 	handle_focus_navigation(ctx, elements)
 	handle_keyboard_input(ctx)
 }
 
 @(private)
 handle_focus_navigation :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element) {
+	if ctx.active_overlay_id != 0 {
+		focused_in_scope := false
+		if ctx.focus != 0 {
+			focused_in_scope = overlay_contains(elements, ctx.focus, ctx.active_overlay_id)
+		}
+		if !focused_in_scope {
+			for i: i32 = 1; i < ctx.element_count[previous_buffer(ctx)]; i += 1 {
+				if elements[i].focusable && elements[i].disabled != .True &&
+				   overlay_contains(elements, i, ctx.active_overlay_id) {
+					ctx.focus = i
+					ctx.focus_id = elements[i].id
+					break
+				}
+			}
+		}
+	}
 	ctx.back_requested =
 		key_pressed(ctx, .ESCAPE) ||
 		controller_button_pressed(ctx.input, .East)
@@ -360,7 +471,8 @@ move_focus_linear :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element, direc
 
 	if current_index < 0 {
 		for i: i32 = 1; i < count; i += 1 {
-			if elements[i].focusable && elements[i].disabled != .True {
+			if elements[i].focusable && elements[i].disabled != .True &&
+			   (ctx.active_overlay_id == 0 || overlay_contains(elements, i, ctx.active_overlay_id)) {
 				ctx.focus = i
 				ctx.focus_id = elements[i].id
 				return
@@ -378,7 +490,8 @@ move_focus_linear :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element, direc
 			candidate -= int(count) - 1
 		}
 		item := &elements[candidate]
-		if item.focusable && item.disabled != .True {
+		if item.focusable && item.disabled != .True &&
+		   (ctx.active_overlay_id == 0 || overlay_contains(elements, i32(candidate), ctx.active_overlay_id)) {
 			ctx.focus = i32(candidate)
 			ctx.focus_id = item.id
 			return
@@ -402,7 +515,8 @@ move_focus_direction :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element, di
 	best_score: f32 = 1e30
 	for i: i32 = 1; i < count; i += 1 {
 		candidate := &elements[i]
-		if !candidate.focusable || candidate.disabled == .True || i == current_index {
+		if !candidate.focusable || candidate.disabled == .True || i == current_index ||
+		   (ctx.active_overlay_id != 0 && !overlay_contains(elements, i, ctx.active_overlay_id)) {
 			continue
 		}
 		center := candidate._position + candidate._size * 0.5
@@ -438,7 +552,7 @@ move_focus_direction :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element, di
 
 @(private)
 next_text_click_count :: proc(ctx: ^Context, id: Id, position: rl.Vector2) -> int {
-	now := rl.GetTime()
+	now := ctx.time
 	within_distance :=
 		linalg.distance(position, ctx.text_click_position) <= TEXT_MULTI_CLICK_DISTANCE
 	within_time := now - ctx.text_click_time <= TEXT_MULTI_CLICK_TIME
@@ -528,9 +642,26 @@ update_text_drag_selection :: proc(ctx: ^Context, element: ^Element, position: r
 
 @(private)
 insert_input_character :: proc(ctx: ^Context, element: ^Element, char: rune) -> bool {
-	if char == '\r' || char == '\n' {
+	if char == '\r' {
 		return true
 	}
+	if char == '\n' && element.overflow != .Wrap {
+		return false
+	}
+	if char != '\n' && element.text_filter != nil && !element.text_filter(char) {
+		return false
+	}
+	if element.max_length > 0 {
+		current_length := rune_count(element.text)
+		if has_text_selection(ctx) {
+			a, b := get_text_selection(ctx)
+			current_length -= rune_count(element.text[a:b])
+		}
+		if current_length >= element.max_length {
+			return false
+		}
+	}
+		record_text_edit(ctx, element)
 	if has_text_selection(ctx) {
 		ctx.caret_index = delete_text_selection(ctx, element)
 	}
@@ -568,15 +699,7 @@ handle_keyboard_input :: proc(ctx: ^Context) {
 
 			if ctx.input.character_count > 0 {
 				for i := 0; i < min(ctx.input.character_count, len(ctx.input.characters)); i += 1 {
-					if !insert_input_character(ctx, element, ctx.input.characters[i]) {
-						break
-					}
-				}
-			} else {
-				for char := rl.GetCharPressed(); char != 0; char = rl.GetCharPressed() {
-					if !insert_input_character(ctx, element, char) {
-						break
-					}
+					insert_input_character(ctx, element, ctx.input.characters[i])
 				}
 			}
 
@@ -698,12 +821,23 @@ handle_keyboard_input :: proc(ctx: ^Context) {
 				}
 			}
 
+			if key_pressed(ctx, .Z) && (ctrl_down || cmd_down) {
+				undo_text(ctx, element)
+			}
+			if key_pressed(ctx, .Y) && (ctrl_down || cmd_down) {
+				redo_text(ctx, element)
+			}
+
 			if key_pressed(ctx, .BACKSPACE) {
 				caret := ctx.caret_index
 				if has_text_selection(ctx) {
+					record_text_edit(ctx, element)
 					caret = delete_text_selection(ctx, element)
 				} else {
 					prev := utf8_prev(text_input, ctx.caret_index)
+					if prev != ctx.caret_index {
+						record_text_edit(ctx, element)
+					}
 					delete_range(text_input, prev, ctx.caret_index)
 					caret = prev
 				}
@@ -713,16 +847,21 @@ handle_keyboard_input :: proc(ctx: ^Context) {
 
 			if key_pressed(ctx, .DELETE) {
 				if has_text_selection(ctx) {
+					record_text_edit(ctx, element)
 					caret := delete_text_selection(ctx, element)
 					set_caret_index(ctx, element, caret)
 				} else {
 					next := utf8_next(text_input, ctx.caret_index)
+					if next != ctx.caret_index {
+						record_text_edit(ctx, element)
+					}
 					delete_range(text_input, ctx.caret_index, next)
 				}
 				element.text = strings.to_string(text_input^)
 			}
 
 			if key_pressed(ctx, .ENTER) && element.overflow == .Wrap {
+				record_text_edit(ctx, element)
 				caret := ctx.caret_index
 				if has_text_selection(ctx) {
 					caret = delete_text_selection(ctx, element)
@@ -762,6 +901,7 @@ handle_keyboard_input :: proc(ctx: ^Context) {
 							ctx.allocator[current_buffer(ctx)],
 						),
 					)
+					record_text_edit(ctx, element)
 					delete_range(text_input, a, b)
 					element.text = strings.to_string(text_input^)
 					set_caret_index(ctx, element, a)
@@ -778,13 +918,13 @@ handle_keyboard_input :: proc(ctx: ^Context) {
 					}
 				}
 				if len(text) > 0 {
-					caret := ctx.caret_index
-					if has_text_selection(ctx) {
-						caret = delete_text_selection(ctx, element)
+					for i := 0; i < len(text); {
+						character, size := utf8.decode_rune(text[i:])
+						if size <= 0 { break }
+						insert_input_character(ctx, element, character)
+						i += size
 					}
-					bytes_inserted := insert_bytes(text_input, caret, text)
 					element.text = strings.to_string(text_input^)
-					set_caret_index(ctx, element, caret + bytes_inserted)
 				}
 			}
 		}

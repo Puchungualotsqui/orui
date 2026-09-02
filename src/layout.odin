@@ -68,6 +68,13 @@ compute_position :: proc(ctx: ^Context, element: ^Element) {
 		apply_bounds(element, &elements[0], placement_parent, base_position.x, base_position.y)
 	}
 
+	// Virtual rows are absolute children of the viewport but must move with its
+	// content offset. Ordinary absolute children intentionally remain fixed so
+	// popups and decorations do not unexpectedly scroll.
+	if element.virtual_item.enabled && placement_parent._virtualized {
+		element._position -= get_scroll_offset(placement_parent)
+	}
+
 	if element.scroll.direction != .None {
 		clamp_scroll_offset(element)
 	}

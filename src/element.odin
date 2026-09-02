@@ -169,6 +169,28 @@ WhitespaceMode :: enum u8 {
 	Preserve,
 }
 
+// A character-level admission filter for text input. Filtering is applied to
+// typed and pasted text before it is inserted into the buffer.
+TextFilter :: proc(character: rune) -> bool
+
+StyleRole :: enum u8 {
+	None,
+	Button,
+	Text_Input,
+	List,
+	Table,
+	Popup,
+	Dialog,
+}
+
+// Marks a child declared through virtual_list_item_config as belonging to a
+// virtual viewport. It is public so custom list row builders can use the same
+// positioning rules as the built-in helpers.
+VirtualItem :: struct {
+	enabled: bool,
+	index:   int,
+}
+
 TextureFit :: enum u8 {
 	// Image will be stretched or squashed to fill the container.
 	Fill,
@@ -327,6 +349,18 @@ ElementConfig :: struct {
 	// How whitespace is handled when measuring and wrapping text.
 	whitespace:       WhitespaceMode,
 	text_input:       ^strings.Builder,
+	placeholder:      string,
+	placeholder_color: rl.Color,
+	text_filter:      TextFilter,
+	max_length:       int,
+
+	// Optional semantic style role. Explicit config values still override the
+	// role's theme defaults.
+	style:            StyleRole,
+	overlay_kind:     OverlayKind,
+
+	// Virtualized list/table metadata.
+	virtual_item:     VirtualItem,
 
 	// The texture to use for the element.
 	texture:          ^rl.Texture2D,
@@ -416,6 +450,16 @@ Element :: struct {
 	line_height:       f32,
 	whitespace:        WhitespaceMode,
 	text_input:        ^strings.Builder,
+	placeholder:       string,
+	placeholder_color: rl.Color,
+	text_filter:       TextFilter,
+	max_length:        int,
+
+	// semantic style role
+	style:             StyleRole,
+
+	// virtualized content
+	virtual_item:      VirtualItem,
 
 	// texture
 	texture:           ^rl.Texture2D,
@@ -436,6 +480,21 @@ Element :: struct {
 
 	// scroll
 	scroll:            ScrollConfig,
+	_scroll_target:    rl.Vector2,
+	_scroll_velocity:  rl.Vector2,
+	_scroll_dragging:  bool,
+	_scroll_drag_start: rl.Vector2,
+	_scroll_last_pointer: rl.Vector2,
+
+	// virtualized content
+	_virtualized:      bool,
+	_virtual_item_count: i32,
+	_virtual_item_extent: rl.Vector2,
+	_virtual_overscan: i32,
+	_virtual_content_size: rl.Vector2,
+
+	// overlay marker
+	_overlay_kind:     OverlayKind,
 
 	// custom event
 	custom_event:      rawptr,
@@ -537,6 +596,23 @@ configure_element :: proc(
 	element.background_color = config.background_color
 	element.border_color = config.border_color
 	element.corner_radius = scaled_corners(config.corner_radius, scale)
+	element.style = config.style
+	element._overlay_kind = config.overlay_kind
+	element.virtual_item = config.virtual_item
+	if config.style != .None {
+		themed := theme_style_for(
+			ctx,
+			config.style,
+			element.id,
+			config.disabled == .True || parent.disabled == .True,
+		)
+		if config.color == {} { element.color = themed.color }
+		if config.background_color == {} { element.background_color = themed.background_color }
+		if config.border_color == {} { element.border_color = themed.border_color }
+		if config.border == {} { element.border = scaled_edges(themed.border, scale) }
+		if config.corner_radius == {} { element.corner_radius = scaled_corners(themed.corner_radius, scale) }
+		if config.padding == {} { element.padding = scaled_edges(themed.padding, scale) }
+	}
 
 	// text
 	element.has_text = config.has_text
@@ -547,6 +623,10 @@ configure_element :: proc(
 	element.line_height = config.line_height
 	element.whitespace = config.whitespace
 	element.text_input = config.text_input
+	element.placeholder = config.placeholder
+	element.placeholder_color = config.placeholder_color
+	element.text_filter = config.text_filter
+	element.max_length = config.max_length
 
 	// texture
 	element.texture = config.texture
@@ -568,6 +648,16 @@ configure_element :: proc(
 	// scroll
 	// Scroll offsets are runtime state and are already in viewport pixels.
 	element.scroll = config.scroll
+	if previous := get_element(element.id); previous != nil {
+		element._scroll_target = previous._scroll_target
+		element._scroll_velocity = previous._scroll_velocity
+		element._scroll_dragging = previous._scroll_dragging
+		element._scroll_drag_start = previous._scroll_drag_start
+		element._scroll_last_pointer = previous._scroll_last_pointer
+		if config.scroll.offset == {} {
+			element.scroll.offset = previous.scroll.offset
+		}
+	}
 
 	element.custom_event = config.custom_event
 }

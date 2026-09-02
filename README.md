@@ -32,8 +32,14 @@ Features:
 - Absolute, relative and fixed positioning
 - Layers (z-index)
 - Padding, margin, borders, rounded corners, overflow, clipping
-- Scroll (with mouse wheel)
+- Scrolling
+  - Mouse wheel, touch drag, momentum, and smooth scrolling
   - Horizontal/vertical scrollbars
+  - Programmatic smooth scroll and scroll-to-focus
+- Virtualized lists and tables
+  - Fixed-estimate rows with overscan
+  - Stable item IDs and controller navigation
+  - Virtualized table columns and cells
 - Input abstraction
   - Raylib mouse, keyboard and gamepad polling
   - Application-provided input snapshots for other backends and tests
@@ -64,17 +70,10 @@ To do:
 
 - 9-slice scaling
 - Grid justify/align
-- Text inputs
-  - Character filtering
-  - Undo/redo (maybe)
-  - Drag and drop (maybe)
-  - Placeholder (maybe)
-  - Customise text select background colour
-- Other widgets (maybe)
-- Grid row/column start (maybe)
-- Scroll with drag
-- Scroll momentum
-- Scroll bounce
+- Text input composition/IME support
+- Variable-height virtualized rows
+- Table sorting and cell-level editing
+- Scroll bounce and platform-specific overscroll
 
 ## Table of Contents
 
@@ -88,6 +87,8 @@ To do:
   - [scrollbar](#scrollbarparent_id-background_config-handle_config-index--0)
 - [Input and controller support](#input-and-controller-support)
 - [Focus, activation and navigation](#focus-activation-and-navigation)
+- [Virtualized lists and tables](#virtualized-lists-and-tables)
+- [Touch and pointer input](#touch-and-pointer-input)
 - [Built-in widgets](#built-in-widgets)
 - [Theme and visual states](#theme-and-visual-states)
 - [Responsive scaling](#responsive-scaling)
@@ -449,6 +450,23 @@ orui.text_input(orui.id("input"), &buffer, {
 })
 ```
 
+Text inputs also support a visual placeholder, a rune filter, a maximum rune
+length, and Ctrl/Cmd undo/redo. Filtering applies to typed and pasted text.
+The application still owns the `strings.Builder`.
+
+```odin
+only_digits :: proc(character: rune) -> bool {
+	return character >= '0' && character <= '9'
+}
+
+orui.text_input(orui.id("pin"), &pin, {
+	placeholder = "PIN",
+	placeholder_color = {140, 145, 155, 255},
+	text_filter = only_digits,
+	max_length = 6,
+})
+```
+
 ### image(id, config, ...modifiers)
 
 Display an image. Takes a pointer to a raylib Texture2D.
@@ -495,6 +513,35 @@ orui.scrollbar(orui.to_id("container id"), {
   corner_radius = corner(4),
 })
 ```
+
+## Virtualized lists and tables
+
+Virtualized views only require the caller to declare visible rows. The first
+version uses a fixed row estimate, which is fast and predictable for controller
+navigation. Declare rows with `virtual_list_item_config` so they receive their
+virtual position and scroll with the viewport:
+
+```odin
+view := orui.begin_virtual_list(orui.id("games"), {
+	width = orui.grow(), height = orui.grow(),
+	scroll = orui.scroll(.Vertical),
+}, {
+	direction = .Vertical,
+	item_count = len(games),
+	item_extent = 52,
+	overscan = 2,
+})
+for i := view.first; i < view.last; i += 1 {
+	orui.label(orui.id(orui.virtual_list_item_id(view.id, i)), games[i].title,
+		orui.virtual_list_item_config(view, i, {font_size = 18}))
+}
+orui.end_virtual_list()
+```
+
+`begin_virtual_table` uses the same visible-row model and provides explicit
+column geometry through `virtual_table_cell_config`. Use stable data IDs when
+selection must survive sorting or filtering. `scroll_to` changes position
+immediately and `scroll_to_smooth` animates to the requested offset.
 
 ## Built-in widgets
 
@@ -607,6 +654,23 @@ case .Cancelled:
 }
 ```
 
+For custom overlays, use `begin_popup` or `begin_modal`, declare normal
+orui contents in the scope, and finish with `end_overlay()`. Modal overlays
+block pointer input behind them, trap keyboard/controller focus, and prioritize
+Escape/controller-B. The existing `dropdown` and `dialog` helpers remain
+available for common cases.
+
+```odin
+if orui.begin_modal(orui.id("confirm modal"), modal_open, {}) {
+	orui.label(orui.id("confirm title"), "Delete file?", {})
+	if orui.button(orui.id("confirm yes"), "Delete", {}) {
+		delete_file()
+		modal_open = false
+	}
+	orui.end_overlay()
+}
+```
+
 Widgets are compositions of normal orui elements rather than separate
 retained objects: buttons are labels, checkboxes are containers with child
 labels, sliders contain a track and handle, and dialogs contain a backdrop,
@@ -647,6 +711,11 @@ theme.focus_border = {255, 220, 100, 255}
 orui.set_theme(ctx, theme)
 ```
 
+The theme also exposes typed `StyleSet` role styles for buttons, text inputs,
+lists, tables, popups, and dialogs. Set `style = .Button` (or another
+`StyleRole`) on a custom element to use the corresponding state-aware style.
+Legacy theme color fields remain supported.
+
 The theme supplies defaults for built-in widgets. An explicit value in an
 `ElementConfig` takes precedence. For example, setting
 `background_color = rl.RED` prevents a button from selecting its theme
@@ -663,6 +732,17 @@ The built-in widgets use these states:
 
 For custom elements, use `hovered()`, `active()`, `focused()`,
 `is_disabled(id)`, and your own selected state to resolve styles.
+
+## Touch and pointer input
+
+`InputState` keeps the existing mouse fields for compatibility and also accepts
+up to `MAX_POINTERS` generalized pointers. The primary pointer drives normal
+widgets; touch pointers additionally support tap, drag, pointer capture, and
+inertial scrolling. `input_from_raylib()` populates the primary mouse/touch
+pointer, while SDL or custom backends can fill `InputState.pointers` directly.
+
+A touch release is treated as a click only when movement stays below the drag
+threshold, preventing a list swipe from activating the row underneath it.
 
 ## Responsive scaling
 

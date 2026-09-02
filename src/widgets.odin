@@ -60,13 +60,19 @@ text_input :: proc(
 	loc := #caller_location,
 ) -> bool {
 	ctx := current_context
+	c := config
+	c.style = c.style == .None ? .Text_Input : c.style
+	if c.height.type == .Fit {
+		c.height = fixed(max(ctx.theme.metrics.control_height, ctx.theme.metrics.touch_target))
+	}
 	element, parent := begin_element(id, loc)
-	configure_element(ctx, element, parent^, config)
+	configure_element(ctx, element, parent^, c)
 	element.layout = .None
 	element.has_text = true
 	element.text_input = text
 	element.text = string(text.buf[:])
 	element.editable = true
+	element.style = c.style
 	element.focusable = true
 	element.whitespace = .Preserve
 	element.cursor = .IBeam
@@ -177,6 +183,17 @@ scrollbar :: proc(
 	end_element()
 }
 
+ThemeMetrics :: struct {
+	control_height:     f32,
+	touch_target:       f32,
+	spacing_small:      f32,
+	spacing_medium:     f32,
+	spacing_large:      f32,
+	corner_radius:      f32,
+	focus_ring_width:   f32,
+	scrollbar_width:    f32,
+}
+
 Theme :: struct {
 	button_background: rl.Color,
 	button_hover:      rl.Color,
@@ -191,10 +208,14 @@ Theme :: struct {
 	border:            rl.Color,
 	focus_border:      rl.Color,
 	dialog_backdrop:   rl.Color,
+	// Typed role styles. The legacy color fields above remain supported and
+	// are used to initialize these defaults.
+	styles:            [7]StyleSet,
+	metrics:           ThemeMetrics,
 }
 
 default_theme :: proc() -> Theme {
-	return {
+	theme: Theme = {
 		button_background = {55, 65, 80, 255},
 		button_hover = {75, 90, 110, 255},
 		button_active = {40, 50, 65, 255},
@@ -208,7 +229,40 @@ default_theme :: proc() -> Theme {
 		border = {100, 110, 125, 255},
 		focus_border = {150, 205, 255, 255},
 		dialog_backdrop = {0, 0, 0, 150},
+		metrics = {
+			control_height = 38,
+			touch_target = 44,
+			spacing_small = 4,
+			spacing_medium = 8,
+			spacing_large = 16,
+			corner_radius = 4,
+			focus_ring_width = 2,
+			scrollbar_width = 8,
+		},
 	}
+	button_style: StyleSet = {
+		normal = {color = theme.text, background_color = theme.button_background, border_color = theme.border},
+		hovered = {color = theme.text, background_color = theme.button_hover, border_color = theme.border},
+		active = {color = theme.text, background_color = theme.button_active, border_color = theme.border},
+		focused = {color = theme.text, background_color = theme.button_focused, border_color = theme.focus_border},
+		disabled = {color = theme.text_disabled, background_color = theme.button_disabled, border_color = theme.border},
+		selected = {color = theme.text, background_color = theme.selected, border_color = theme.focus_border},
+	}
+	input_style: StyleSet = {
+		normal = {color = theme.text, border_color = theme.border},
+		focused = {color = theme.text, border_color = theme.focus_border},
+		disabled = {color = theme.text_disabled, border_color = theme.border},
+	}
+	panel_style: StyleSet = {
+		normal = {color = theme.text, background_color = theme.button_background, border_color = theme.border},
+	}
+	theme.styles[int(StyleRole.Button)] = button_style
+	theme.styles[int(StyleRole.Text_Input)] = input_style
+	theme.styles[int(StyleRole.List)] = panel_style
+	theme.styles[int(StyleRole.Table)] = panel_style
+	theme.styles[int(StyleRole.Popup)] = panel_style
+	theme.styles[int(StyleRole.Dialog)] = panel_style
+	return theme
 }
 
 set_theme :: proc(ctx: ^Context, theme: Theme) {
@@ -226,8 +280,12 @@ button :: proc(
 	ctx := current_context
 	c := config
 	c.focusable = true
+	c.style = c.style == .None ? .Button : c.style
 	if c.font_size == 0 {
 		c.font_size = 16
+	}
+	if c.height.type == .Fit {
+		c.height = fixed(max(ctx.theme.metrics.control_height, ctx.theme.metrics.touch_target))
 	}
 	if c.color == {} {
 		c.color = (c.disabled == .True || is_disabled(widget_id)) ? ctx.theme.text_disabled : ctx.theme.text
@@ -239,7 +297,7 @@ button :: proc(
 		c.border_color = focused(widget_id) ? ctx.theme.focus_border : ctx.theme.border
 	}
 	if c.corner_radius == {} {
-		c.corner_radius = corner(4)
+		c.corner_radius = corner(ctx.theme.metrics.corner_radius)
 	}
 	if c.cursor == .Inherit {
 		c.cursor = .Pointing_Hand
@@ -279,13 +337,13 @@ slider :: proc(
 		c.width = fixed(240)
 	}
 	if c.height.type == .Fit {
-		c.height = fixed(24)
+		c.height = fixed(max(ctx.theme.metrics.control_height * 0.65, ctx.theme.metrics.touch_target))
 	}
 	if c.background_color == {} {
 		c.background_color = ctx.theme.track
 	}
 	if c.corner_radius == {} {
-		c.corner_radius = corner(4)
+		c.corner_radius = corner(ctx.theme.metrics.corner_radius)
 	}
 	if c.cursor == .Inherit {
 		c.cursor = .Resize_EW
@@ -356,7 +414,7 @@ checkbox :: proc(
 	c := config
 	c.focusable = true
 	c.width = c.width.type == .Fit ? fixed(220) : c.width
-	c.height = c.height.type == .Fit ? fixed(32) : c.height
+	c.height = c.height.type == .Fit ? fixed(max(ctx.theme.metrics.control_height, ctx.theme.metrics.touch_target)) : c.height
 	c.cursor = c.cursor == .Inherit ? .Pointing_Hand : c.cursor
 	changed := clicked(widget_id) || activated(widget_id)
 	{container(id(widget_id), c, ..modifiers)
@@ -448,8 +506,13 @@ dropdown :: proc(
 		}
 
 		if open^ {
+			if ctx.active_overlay_id != popup_id {
+				ctx.overlay_previous_focus = ctx.focus_id
+				ctx.active_overlay_id = popup_id
+			}
 		{container(id(popup_id), {
 				position = {.Absolute, {}},
+				overlay_kind = .Popup,
 				placement = placement(.Bottom, .Top),
 				bounds = {.Window, .Flip, 8},
 				width = config.width.type == .Fixed ? config.width : fixed(240),
@@ -500,11 +563,16 @@ dialog :: proc(
 		return .None
 	}
 	ctx := current_context
+	if ctx.active_overlay_id != widget_id {
+		ctx.overlay_previous_focus = ctx.focus_id
+		ctx.active_overlay_id = widget_id
+	}
 	result := DialogResult.None
 	backdrop: ElementConfig = {
 		position = {.Fixed, {}}, width = percent(1), height = percent(1),
 		layout = .Flex, align_main = .Center, align_cross = .Center,
 		background_color = ctx.theme.dialog_backdrop, layer = 1000,
+		overlay_kind = .Modal,
 		capture = .True,
 	}
 	{container(id(widget_id), backdrop)

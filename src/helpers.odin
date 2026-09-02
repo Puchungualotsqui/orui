@@ -179,17 +179,17 @@ clicked :: proc {
 @(private)
 // Whether the current element has been clicked this frame.
 _clicked :: proc() -> bool {
-	return current_context.input.mouse_left_released && active()
+	return current_context.input.mouse_left_released && active() && !current_context.pointer_dragging
 }
 
 @(private)
 _clicked_string :: proc(id: string) -> bool {
-	return current_context.input.mouse_left_released && active(id)
+	return current_context.input.mouse_left_released && active(id) && !current_context.pointer_dragging
 }
 
 @(private)
 _clicked_id :: proc(id: Id) -> bool {
-	return current_context.input.mouse_left_released && active(id)
+	return current_context.input.mouse_left_released && active(id) && !current_context.pointer_dragging
 }
 
 activated :: proc {
@@ -459,12 +459,19 @@ _set_scroll_offset :: proc(offset: rl.Vector2) {
 @(private)
 _set_scroll_offset_id :: proc(id: Id, offset: rl.Vector2) {
 	ctx := current_context
-	elements := &ctx.elements[current_buffer(ctx)]
-	count := ctx.element_count[current_buffer(ctx)]
-	for i in 0 ..< count {
-		if elements[i].id == id {
-			elements[i].scroll.offset = offset
-			return
+	// Prefer the current tree for calls made while declaring a frame, but also
+	// support requests made before begin() by updating the previous tree.
+	for pass in 0 ..< 2 {
+		buffer := pass == 0 ? current_buffer(ctx) : previous_buffer(ctx)
+		elements := &ctx.elements[buffer]
+		count := ctx.element_count[buffer]
+		for i in 0 ..< count {
+			if elements[i].id == id {
+				elements[i].scroll.offset = offset
+				elements[i]._scroll_target = offset
+				elements[i]._scroll_velocity = {}
+				return
+			}
 		}
 	}
 }
@@ -632,8 +639,8 @@ scrolls_y :: proc(element: ^Element) -> bool {
 
 @(private)
 clamp_scroll_offset :: proc(element: ^Element) {
-	// TODO: remove this, replace with scroll velocity/gravity/something
-	// animate towards the nearest scrollable position instead of snapping
+	// Physics updates the visual offset before layout. Keep the final value
+	// inside the current content bounds when content or viewport size changes.
 	min_x, max_x := scroll_bounds_x(element)
 	min_y, max_y := scroll_bounds_y(element)
 	scroll := element.scroll.offset
@@ -683,6 +690,10 @@ scroll_content_size :: proc(element: ^Element) -> rl.Vector2 {
 
 @(private)
 scroll_content_bounds_x :: proc(element: ^Element) -> (min_x: f32, max_x: f32) {
+	if element._virtualized {
+		return 0, element._virtual_content_size.x
+	}
+
 	if element.has_text {
 		return aligned_content_bounds(
 			element.align.x,
@@ -709,6 +720,10 @@ scroll_content_bounds_x :: proc(element: ^Element) -> (min_x: f32, max_x: f32) {
 
 @(private)
 scroll_content_bounds_y :: proc(element: ^Element) -> (min_y: f32, max_y: f32) {
+	if element._virtualized {
+		return 0, element._virtual_content_size.y
+	}
+
 	if element.has_text {
 		return aligned_content_bounds(
 			element.align.y,

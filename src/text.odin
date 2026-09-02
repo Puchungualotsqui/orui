@@ -788,6 +788,23 @@ _render_text_line :: proc(
 }
 
 @(private)
+render_placeholder :: proc(ctx: ^Context, element: ^Element) {
+	letter_spacing := _letter_spacing(element.letter_spacing)
+	inner_width := inner_width(element)
+	scroll_offset := get_scroll_offset(element)
+	x := element._position.x + element.padding.left + element.border.left - scroll_offset.x
+	y := element._position.y + element.padding.top + element.border.top + calculate_text_offset(element) - scroll_offset.y
+	old_color := element.color
+	if element.placeholder_color != {} {
+		element.color = element.placeholder_color
+	} else {
+		element.color = {old_color.r, old_color.g, old_color.b, old_color.a / 2}
+	}
+	_render_text_line(ctx, element, element.placeholder, 0, len(element.placeholder), element._text_width, x, y, letter_spacing, inner_width)
+	element.color = old_color
+}
+
+@(private)
 render_text :: proc(ctx: ^Context, element: ^Element) {
 	letter_spacing := element.letter_spacing > 0 ? element.letter_spacing : 1
 	inner_width := inner_width(element)

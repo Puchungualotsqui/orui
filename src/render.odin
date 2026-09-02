@@ -218,7 +218,9 @@ render_element :: proc(ctx: ^Context, index: i32) {
 	}
 
 	if element.has_text {
-		if element.overflow == .Wrap {
+		if len(element.text) == 0 && len(element.placeholder) > 0 {
+			render_placeholder(ctx, element)
+		} else if element.overflow == .Wrap {
 			render_wrapped_text(ctx, element)
 		} else {
 			render_text(ctx, element)
