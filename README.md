@@ -41,8 +41,9 @@ Features:
   - Stable item IDs and controller navigation
   - Virtualized table columns and cells
 - Input abstraction
-  - Raylib mouse, keyboard and gamepad polling
+  - Raylib mouse, touch, keyboard and gamepad polling
   - Application-provided input snapshots for other backends and tests
+  - Generalized mouse/touch/pen pointers with capture
   - Keyboard and controller focus navigation
   - Programmatic focus and activation
   - Escape/B back handling and keyboard shortcut queries
@@ -62,6 +63,10 @@ Features:
   - Double click, triple click
   - Mouse and keyboard text selection
   - Copy/cut/paste
+  - Placeholder, rune filtering, maximum length, undo/redo
+- Theme and style roles
+  - State-aware typed styles and per-context themes
+  - Deck-friendly touch-target and focus metrics
 - Custom render events
   - Interleave your own rendering with the UI
 - Animation helpers
@@ -175,13 +180,19 @@ orui.begin_responsive_with_input(ctx, width, height, input)
 
 This makes the UI input path independent from the backend. Applications can
 fill an `InputState` themselves for SDL, a custom platform layer, or tests.
-The snapshot contains mouse position/buttons/wheel, keyboard down/pressed/
-repeat state, text characters, clipboard text, and up to four controllers.
+The snapshot contains mouse position/buttons/wheel, up to `MAX_POINTERS`
+generalized pointers, keyboard down/pressed/repeat state, text characters,
+clipboard text, and up to four controllers. The first pointer is the primary
+pointer used by normal widgets.
 
 ```odin
 input: orui.InputState
 input.mouse_position = {100, 80}
 input.mouse_left_pressed = true
+input.pointer_count = 1
+input.pointers[0] = {
+    id = 0, kind = .Touch, position = {100, 80}, pressed = true, down = true,
+}
 input.controllers[0].connected = true
 input.controllers[0].buttons_pressed[int(orui.ControllerButton.South)] = true
 input.characters[0] = 'A'
@@ -452,7 +463,16 @@ orui.text_input(orui.id("input"), &buffer, {
 
 Text inputs also support a visual placeholder, a rune filter, a maximum rune
 length, and Ctrl/Cmd undo/redo. Filtering applies to typed and pasted text.
-The application still owns the `strings.Builder`.
+The filter is an insertion filter, not whole-value validation, so applications
+can still validate the completed value separately. `max_length` counts Unicode
+runes. The application still owns the `strings.Builder`.
+
+Undo history is kept per input ID in the context, stores caret and selection
+state, and is cleared when a new edit is made after undo. Each low-level edit
+currently creates an undo entry; history is capped at 64 entries and buffers
+larger than 8192 bytes are not recorded. External mutations to the builder are
+accepted as the new visible value but should be treated as a new application
+baseline rather than an undoable edit.
 
 ```odin
 only_digits :: proc(character: rune) -> bool {
@@ -514,6 +534,36 @@ orui.scrollbar(orui.to_id("container id"), {
 })
 ```
 
+### Smooth scrolling
+
+Scrollable elements continue to use `scroll(.Vertical)`, `scroll(.Horizontal)`,
+or `scroll(.Auto)`. Mouse-wheel input moves toward a target using
+frame-rate-independent smoothing. Touch input follows the pointer after a
+small movement threshold and carries velocity into inertial scrolling after
+release. Pointer capture allows the gesture to continue outside the viewport.
+
+```odin
+{orui.container(orui.id("feed"), {
+    width = orui.grow(), height = orui.grow(),
+    scroll = orui.scroll(.Vertical),
+    clip = {.Self, {}},
+})}
+```
+
+Use these procedures for programmatic movement:
+
+```odin
+orui.scroll_to(orui.to_id("feed"), {0, 480})
+// Keep the current position and animate toward the requested offset.
+orui.scroll_to_smooth(orui.to_id("feed"), {0, 960})
+// For a virtual list, reveal an item using the requested alignment.
+orui.scroll_to_item(orui.to_id("feed"), 42, .Nearest)
+```
+
+`scroll_to` is immediate. `scroll_to_smooth` uses the same scroll physics as
+wheel input. `scroll_to_item` accepts `.Nearest`, `.Start`, `.Center`, or
+`.End`; `.Nearest` avoids moving an item that is already visible.
+
 ## Virtualized lists and tables
 
 Virtualized views only require the caller to declare visible rows. The first
@@ -539,9 +589,34 @@ orui.end_virtual_list()
 ```
 
 `begin_virtual_table` uses the same visible-row model and provides explicit
-column geometry through `virtual_table_cell_config`. Use stable data IDs when
-selection must survive sorting or filtering. `scroll_to` changes position
-immediately and `scroll_to_smooth` animates to the requested offset.
+column geometry through `virtual_table_cell_config`. The table primitive does
+not create a header, sorting behavior, or cell contents automatically; declare
+a header separately and use the returned column definitions when declaring
+visible cells. Close a table with `end_virtual_list()`.
+
+```odin
+columns := []orui.TableColumn{
+    {width = 96, title = "Name"},
+    {width = 120, title = "Status"},
+}
+table := orui.begin_virtual_table(orui.id("processes"), {
+    width = orui.grow(), height = orui.grow(),
+    scroll = orui.scroll(.Vertical),
+}, len(processes), 44, columns)
+for row := table.list.first; row < table.list.last; row += 1 {
+    orui.label(orui.id("name cell", row), processes[row].name,
+        orui.virtual_table_cell_config(table, row, 0, {}))
+    orui.label(orui.id("status cell", row), processes[row].status,
+        orui.virtual_table_cell_config(table, row, 1, {}))
+}
+orui.end_virtual_list()
+```
+
+`virtual_list_item_id` is an index-based convenience ID. For data that can be
+sorted, inserted, or filtered, use an application-owned stable ID for the row
+and preserve selection/focus in the application model. `scroll_to` changes
+position immediately, `scroll_to_smooth` animates toward an offset, and
+`scroll_to_item` reveals a virtual row.
 
 ## Built-in widgets
 
@@ -656,9 +731,10 @@ case .Cancelled:
 
 For custom overlays, use `begin_popup` or `begin_modal`, declare normal
 orui contents in the scope, and finish with `end_overlay()`. Modal overlays
-block pointer input behind them, trap keyboard/controller focus, and prioritize
-Escape/controller-B. The existing `dropdown` and `dialog` helpers remain
-available for common cases.
+block pointer input behind them, trap keyboard/controller focus, restore the
+focus target when they close, and prioritize Escape/controller-B. Popups can
+use the existing absolute placement and window-bounds configuration. The
+existing `dropdown` and `dialog` helpers remain available for common cases.
 
 ```odin
 if orui.begin_modal(orui.id("confirm modal"), modal_open, {}) {
@@ -668,6 +744,29 @@ if orui.begin_modal(orui.id("confirm modal"), modal_open, {}) {
 		modal_open = false
 	}
 	orui.end_overlay()
+}
+```
+
+A popup uses the same scope API. It can be anchored to an existing element
+with `position`, `placement`, and `bounds`:
+
+```odin
+if orui.begin_popup(orui.id("context menu"), menu_open, {
+    position = {.Absolute, {}},
+    placement = orui.placement(.BottomLeft, .TopLeft),
+    bounds = {.Window, .Flip, 8},
+    width = orui.fixed(220),
+    layer = 100,
+}) {
+    if orui.button(orui.id("rename"), "Rename", {}) {
+        rename_selected()
+        menu_open = false
+    }
+    if orui.button(orui.id("delete"), "Delete", {}) {
+        delete_selected()
+        menu_open = false
+    }
+    orui.end_overlay()
 }
 ```
 
@@ -714,7 +813,27 @@ orui.set_theme(ctx, theme)
 The theme also exposes typed `StyleSet` role styles for buttons, text inputs,
 lists, tables, popups, and dialogs. Set `style = .Button` (or another
 `StyleRole`) on a custom element to use the corresponding state-aware style.
-Legacy theme color fields remain supported.
+Legacy theme color fields remain supported. Explicit values in
+`ElementConfig` override values supplied by a role style.
+
+```odin
+theme := orui.default_theme()
+theme.metrics.touch_target = 48
+theme.metrics.corner_radius = 6
+theme.styles[int(orui.StyleRole.Button)].focused.background_color = {70, 110, 160, 255}
+theme.styles[int(orui.StyleRole.Button)].focused.border_color = {255, 220, 100, 255}
+orui.set_theme(ctx, theme)
+
+orui.element(orui.id("custom control"), {
+    style = .Button,
+    width = orui.fixed(220), height = orui.fixed(48),
+})
+orui.end_element()
+```
+
+`ThemeMetrics.touch_target` is used as the minimum default size for built-in
+controls. It does not force the size of custom elements that specify their own
+dimensions.
 
 The theme supplies defaults for built-in widgets. An explicit value in an
 `ElementConfig` takes precedence. For example, setting
@@ -743,6 +862,31 @@ pointer, while SDL or custom backends can fill `InputState.pointers` directly.
 
 A touch release is treated as a click only when movement stays below the drag
 threshold, preventing a list swipe from activating the row underneath it.
+The primary pointer is used by normal widgets; additional active pointers are
+available for application-specific gestures. `PointerInput` contains an ID,
+kind (`.Mouse`, `.Touch`, `.Pen`, or `.Virtual`), position, delta, pressure,
+and down/pressed/released transitions.
+
+```odin
+input: orui.InputState
+input.pointer_count = 1
+input.pointers[0] = {
+    id = 0,
+    kind = .Touch,
+    position = touch_position,
+    delta = touch_delta,
+    pressure = 1,
+    down = touch_down,
+    pressed = touch_pressed,
+    released = touch_released,
+}
+orui.begin_with_input(ctx, width, height, input)
+```
+
+Raylib touch points are converted by `input_from_raylib()`. Custom backends
+must provide the transition fields themselves. Normal widgets currently use
+the primary pointer; multi-touch gesture interpretation remains application
+specific.
 
 ## Responsive scaling
 
