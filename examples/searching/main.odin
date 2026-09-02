@@ -1,34 +1,70 @@
-package demo
+package new_features
 
 import orui "../../src"
+import "core:fmt"
 import "core:path/filepath"
 import "core:strings"
 import rl "vendor:raylib"
 
-BODY_TEXT :: "orui is an immediate mode UI library for odin and raylib, with support for flex and grid layouts. You can click here to visit the orui repository on github: Visit the orui repo. Different kinds of text decorations in orui can be added this way."
-SEARCH_TEXT :: "orui"
-LINK_TEXT :: "Visit the orui repo"
-HIGHLIGHT_COLOR :: rl.Color{255, 214, 82, 120}
-
-TextRange :: struct {
-	start: int,
-	end:   int,
-	color: rl.Color,
+DemoItem :: struct {
+	name:   string,
+	status: string,
 }
 
-TextRanges :: struct {
-	items: [8]TextRange,
-	count: int,
+ITEMS :: []DemoItem{
+	{"Moonfall Tactics", "Installed"},
+	{"Signal Lost", "Ready to play"},
+	{"Iron Orchard", "Updating"},
+	{"Neon Circuit", "Installed"},
+	{"Deep Current", "Queued"},
+	{"Paper Kingdoms", "Installed"},
+}
+
+ascii_lower :: proc(value: u8) -> u8 {
+	if value >= 'A' && value <= 'Z' {
+		return value + ('a' - 'A')
+	}
+	return value
+}
+
+contains_ascii_ci :: proc(value, query: string) -> bool {
+	if len(query) == 0 {
+		return true
+	}
+	if len(query) > len(value) {
+		return false
+	}
+	for start := 0; start + len(query) <= len(value); start += 1 {
+		matches := true
+		for offset := 0; offset < len(query); offset += 1 {
+			if ascii_lower(value[start + offset]) != ascii_lower(query[offset]) {
+				matches = false
+				break
+			}
+		}
+		if matches {
+			return true
+		}
+	}
+	return false
+}
+
+search_filter :: proc(character: rune) -> bool {
+	return(
+		(character >= 'a' && character <= 'z') ||
+		(character >= 'A' && character <= 'Z') ||
+		(character >= '0' && character <= '9') ||
+		character == ' ' || character == '-' || character == '_' \
+	)
 }
 
 main :: proc() {
-	rl.SetConfigFlags({.WINDOW_RESIZABLE, .VSYNC_HINT, .MSAA_4X_HINT, .WINDOW_HIGHDPI})
-	rl.InitWindow(960, 540, "orui text decoration")
+	rl.SetConfigFlags({.WINDOW_RESIZABLE, .VSYNC_HINT, .MSAA_4X_HINT})
+	rl.InitWindow(1280, 800, "orui - New Features")
 	defer rl.CloseWindow()
 
 	ctx := new(orui.Context)
 	defer free(ctx)
-
 	orui.init(ctx)
 	defer orui.destroy(ctx)
 
@@ -36,164 +72,191 @@ main :: proc() {
 		{#directory, "..", "..", "assets", "Inter-Regular.ttf"},
 		context.temp_allocator,
 	)
-	ctx.default_font = rl.LoadFontEx(
-		strings.clone_to_cstring(font_path, context.temp_allocator),
-		80,
-		{},
-		0,
-	)
+	ctx.default_font = rl.LoadFont(strings.clone_to_cstring(font_path, context.temp_allocator))
 	defer rl.UnloadFont(ctx.default_font)
 
-	text_id := orui.to_id("highlighted text")
-	search_ranges := find_all_ranges(BODY_TEXT, SEARCH_TEXT)
-	link_range := find_first_range(BODY_TEXT, LINK_TEXT)
-	current_cursor := rl.MouseCursor.DEFAULT
+	theme := orui.default_theme()
+	theme.metrics.touch_target = 48
+	theme.metrics.control_height = 42
+	theme.metrics.corner_radius = 6
+	theme.button_background = {35, 45, 60, 255}
+	theme.button_hover = {55, 80, 110, 255}
+	theme.selected = {40, 120, 170, 255}
+	theme.focus_border = {255, 220, 100, 255}
+	theme.styles[int(orui.StyleRole.Button)].focused.background_color = theme.button_focused
+	theme.styles[int(orui.StyleRole.Button)].focused.border_color = theme.focus_border
+	orui.set_theme(ctx, theme)
+
+	items := ITEMS
+	search := strings.builder_make()
+	defer strings.builder_destroy(&search)
+	selected := 0
+	menu_open := false
+	modal_open := false
+	status := "Touch, mouse, keyboard, or controller input"
 
 	for !rl.WindowShouldClose() {
 		rl.BeginDrawing()
-		rl.ClearBackground({245, 242, 235, 255})
+		rl.ClearBackground({18, 22, 30, 255})
 
-		orui.begin(ctx, rl.GetScreenWidth(), rl.GetScreenHeight())
-		cursor_hint := orui.cursor(ctx)
-		next_cursor :=
-			cursor_hint == .Unspecified ? rl.MouseCursor.DEFAULT : rl.MouseCursor(cursor_hint)
-		if next_cursor != current_cursor {
-			rl.SetMouseCursor(next_cursor)
-			current_cursor = next_cursor
-		}
+		width := rl.GetScreenWidth()
+		height := rl.GetScreenHeight()
+		// The Raylib adapter includes mouse and touchscreen pointers. A custom
+		// backend can populate the same InputState before this call.
+		input := orui.input_from_raylib()
+		orui.begin_responsive_with_input(ctx, width, height, input)
 
-		{orui.container(
-				orui.id("root"),
-				{
-					width = orui.grow(),
-					height = orui.grow(),
-					padding = orui.padding(48),
-					align_main = .Center,
-					align_cross = .Center,
-				},
-			)
-			{orui.container(
-					orui.id("panel"),
-					{
-						direction = .TopToBottom,
-						width = orui.fixed(690),
-						height = orui.fit(),
-						padding = orui.padding(24),
-						gap = 14,
-						background_color = rl.WHITE,
-						border = orui.border(1),
-						border_color = {205, 200, 190, 255},
-						corner_radius = orui.corner(6),
-					},
-				)
-				orui.label(
-					orui.id("title"),
-					"Text decorations",
-					{
-						font_size = 22,
-						color = {40, 45, 50, 255},
-						width = orui.grow(),
-						height = orui.fit(),
-					},
-				)
-
-				orui.label(
-					orui.id(text_id),
-					BODY_TEXT,
-					{
-						font_size = 18,
-						line_height = 1.5,
-						color = {32, 34, 38, 255},
-						width = orui.grow(),
-						height = orui.fit(),
-						overflow = .Wrap,
-					},
-				)
+		query := strings.to_string(search)
+		visible_items: [256]int
+		visible_count := 0
+		for item, index in items {
+			if contains_ascii_ci(item.name, query) && visible_count < len(visible_items) {
+				visible_items[visible_count] = index
+				visible_count += 1
 			}
 		}
+		if visible_count > 0 {
+			selected = clamp(selected, 0, visible_count - 1)
+		}
 
-		commands := orui.end()
+		{orui.container(orui.id("app"), {
+				direction = .TopToBottom,
+				width = orui.grow(), height = orui.grow(),
+				padding = orui.padding(24), gap = theme.metrics.spacing_medium,
+			})
+			{orui.container(orui.id("header"), {
+					direction = .LeftToRight,
+					width = orui.grow(), height = orui.fit(),
+					align_cross = .Center, align_main = .SpaceBetween,
+				})
+				orui.label(orui.id("title"), "ORUI FEATURE TOUR", {
+					font_size = 28, color = theme.text,
+				})
+				orui.label(orui.id("status"), status, {
+					font_size = 14, color = {170, 180, 195, 255},
+				})
+			}
 
-		link_hovered := text_range_hovered(commands, text_id, link_range)
-
-		for command in commands {
-			if command.source.id == text_id {
-				draw_search_highlights(command, search_ranges.items[:search_ranges.count])
-				if link_hovered {
-					draw_link_decoration(command, link_range)
+			{orui.container(orui.id("toolbar"), {
+					direction = .LeftToRight,
+					width = orui.grow(), height = orui.fit(),
+					align_cross = .Center, gap = theme.metrics.spacing_medium,
+				})
+				orui.text_input(orui.id("search"), &search, {
+					width = orui.grow(), height = orui.fixed(48),
+					font_size = 17, color = theme.text,
+					placeholder = "Filter games...",
+					text_filter = search_filter,
+					background_color = {28, 34, 45, 255},
+					border = orui.border(1),
+					border_color = orui.focused() ? theme.focus_border : theme.border,
+					padding = orui.padding(12),
+					overflow = .Visible,
+					clip = {.Intersect, {}},
+					scroll = orui.scroll(.Horizontal),
+				})
+				if orui.button(orui.id("jump"), "Jump to row 3", {
+					width = orui.fixed(160), height = orui.fixed(48),
+				}) {
+					orui.scroll_to_smooth(orui.to_id("results"), {0, 3 * 52})
+					status = "Smooth-scrolling to row 3"
+				}
+				if orui.button(orui.id("menu"), "Menu", {
+					width = orui.fixed(110), height = orui.fixed(48),
+				}) {
+					menu_open = !menu_open
 				}
 			}
 
-			orui.render_command(command)
+			orui.label(orui.id("result count"), fmt.tprintf("Showing %d of %d games", visible_count, len(items)), {
+				font_size = 14, color = {170, 180, 195, 255},
+			})
 
-			if command.source.id == text_id {
-				draw_link_underline(command, link_range)
+			list := orui.begin_virtual_list(orui.id("results"), {
+				width = orui.grow(), height = orui.grow(),
+				scroll = orui.scroll(.Vertical),
+				background_color = {24, 29, 39, 255},
+				padding = orui.padding(6),
+				clip = {.Self, {}},
+			}, {
+				direction = .Vertical,
+				item_count = visible_count,
+				item_extent = 52,
+				overscan = 2,
+			})
+			for row := list.first; row < list.last; row += 1 {
+				item_index := visible_items[row]
+				item := items[item_index]
+				row_color := row == selected ? theme.selected : theme.button_background
+				if orui.button(orui.id(orui.virtual_list_item_id(list.id, item_index)),
+					fmt.tprintf("%s    %s", item.name, item.status),
+					orui.virtual_list_item_config(list, row, {
+						width = orui.percent(1), height = orui.fixed(52),
+						padding = orui.padding(14, 8),
+						background_color = row_color,
+						border = orui.border(1),
+						border_color = row == selected ? theme.focus_border : theme.border,
+						color = theme.text,
+					})
+				) {
+					selected = row
+					status = fmt.tprintf("Selected %s", item.name)
+				}
 			}
+			orui.end_virtual_list()
 		}
 
+		if menu_open && orui.begin_popup(orui.id("menu popup"), true, {
+			position = {.Fixed, {930, 105}},
+			width = orui.fixed(220),
+			padding = orui.padding(6),
+			background_color = {35, 42, 55, 255},
+			border = orui.border(1), border_color = theme.border,
+		}) {
+			if orui.button(orui.id("open details"), "Open details", {}) {
+				menu_open = false
+				modal_open = true
+			}
+			if orui.button(orui.id("close menu"), "Close menu", {}) {
+				menu_open = false
+			}
+			orui.end_overlay()
+		}
+
+		if modal_open && orui.begin_modal(orui.id("details modal"), true, {
+			background_color = {0, 0, 0, 150},
+			layout = .Flex, align_main = .Center, align_cross = .Center,
+		}) {
+			{orui.container(orui.id("details panel"), {
+					width = orui.fixed(520), height = orui.fit(),
+					padding = orui.padding(24), gap = 12,
+					background_color = theme.button_background,
+					border = orui.border(1), border_color = theme.focus_border,
+					direction = .TopToBottom,
+				})
+				orui.label(orui.id("details title"), "Managed modal overlay", {
+					font_size = 22, color = theme.text,
+				})
+				orui.label(orui.id("details body"), "This overlay traps focus and consumes Back/Escape before the page.", {
+					font_size = 16, color = theme.text, width = orui.grow(), overflow = .Wrap,
+				})
+				if orui.button(orui.id("close details"), "Close", {
+					width = orui.fixed(140), height = orui.fixed(48),
+				}) {
+					modal_open = false
+				}
+			}
+			orui.end_overlay()
+		}
+		if orui.back_pressed() {
+			orui.consume_back()
+			if menu_open { menu_open = false } else { modal_open = false }
+		}
+
+		for command in orui.end() {
+			orui.render_command(command)
+		}
 		rl.EndDrawing()
 		free_all(context.temp_allocator)
 	}
-}
-
-find_all_ranges :: proc(text, needle: string) -> TextRanges {
-	ranges: TextRanges
-	i := 0
-	for i <= len(text) - len(needle) && ranges.count < len(ranges.items) {
-		if text[i:i + len(needle)] == needle {
-			ranges.items[ranges.count] = {i, i + len(needle), HIGHLIGHT_COLOR}
-			ranges.count += 1
-			i += len(needle)
-		} else {
-			i += 1
-		}
-	}
-	return ranges
-}
-
-find_first_range :: proc(text, needle: string) -> TextRange {
-	for i := 0; i <= len(text) - len(needle); i += 1 {
-		if text[i:i + len(needle)] == needle {
-			return {i, i + len(needle), {}}
-		}
-	}
-	return {}
-}
-
-draw_search_highlights :: proc(command: orui.RenderCommand, ranges: []TextRange) {
-	for range in ranges {
-		rect := orui.measure_text_command_range(command, range.start, range.end) or_continue
-		rl.DrawRectangleRec(rect, range.color)
-	}
-}
-
-draw_link_decoration :: proc(command: orui.RenderCommand, range: TextRange) -> bool {
-	rect := orui.measure_text_command_range(command, range.start, range.end) or_return
-	rl.DrawRectangleRec(rect, {82, 146, 255, 70})
-	return true
-}
-
-draw_link_underline :: proc(command: orui.RenderCommand, range: TextRange) -> bool {
-	rect := orui.measure_text_command_range(command, range.start, range.end) or_return
-	rl.DrawRectangleRec({rect.x, rect.y + rect.height - 2, rect.width, 1}, rl.BLUE)
-	return true
-}
-
-text_range_hovered :: proc(
-	commands: []orui.RenderCommand,
-	text_id: orui.Id,
-	range: TextRange,
-) -> bool {
-	mouse := rl.GetMousePosition()
-	for command in commands {
-		if command.type != .Text || command.source.id != text_id {
-			continue
-		}
-
-		rect := orui.measure_text_command_range(command, range.start, range.end) or_continue
-		if rl.CheckCollisionPointRec(mouse, rect) {
-			return true
-		}
-	}
-	return false
 }
