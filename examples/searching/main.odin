@@ -20,7 +20,26 @@ ITEMS :: []DemoItem{
 	{"Neon Circuit", "Installed"},
 	{"Deep Current", "Queued"},
 	{"Paper Kingdoms", "Installed"},
+	{"Ashen Horizon", "Installed"},
+	{"Starlight Foundry", "Ready to play"},
+	{"Glass Harbor", "Updating"},
+	{"Cinder Protocol", "Queued"},
+	{"Velvet Comet", "Installed"},
+	{"Echoes of Meridian", "Ready to play"},
+	{"Solaris Drift", "Installed"},
+	{"Winter Circuit", "Updating"},
+	{"Obsidian Vale", "Queued"},
+	{"Lunar Assembly", "Installed"},
+	{"Copper Skies", "Ready to play"},
+	{"Warden of Tides", "Installed"},
+	{"Silent Atlas", "Updating"},
+	{"Emberline", "Queued"},
+	{"Aster Colony", "Installed"},
+	{"Night Signal", "Ready to play"},
+	{"Rift Garden", "Installed"},
+	{"Marble Frontier", "Updating"},
 }
+
 
 ascii_lower :: proc(value: u8) -> u8 {
 	if value >= 'A' && value <= 'Z' {
