@@ -50,17 +50,28 @@ Context :: struct {
 	previous:              i32,
 	parent:                i32,
 
-	// mouse input
+	// input
+	input:                 InputState,
 	pointer_capture:       i32,
 	pointer_capture_id:    Id,
 	pointer_blocker_id:    Id,
 	pointer_cursor:        CursorHint,
 	hover:                 [2]IdBuffer,
 	active:                [2]IdBuffer,
+	focus_id:              Id,
+	requested_focus_id:    Id,
+	activated_id:          Id,
+	requested_activation_id: Id,
+	back_requested:        bool,
+	navigation_axis:       [2]f32,
+	navigation_direction:  i8,
+	focus:                 i32,
+
+	// responsive layout and styling
+	scale:                 f32,
+	theme:                 Theme,
 
 	// text input
-	focus:                 i32,
-	focus_id:              Id,
 	prev_focus_id:         Id,
 	caret_index:           int,
 	caret_position:        rl.Vector2,
@@ -76,6 +87,8 @@ Context :: struct {
 }
 
 init :: proc(ctx: ^Context) {
+	ctx.scale = 1
+	ctx.theme = default_theme()
 	for i in 0 ..< 2 {
 		ctx.arena_buffer[i] = make([]byte, DEFAULT_ARENA_CAPACITY)
 		mem.arena_init(&ctx.arena[i], ctx.arena_buffer[i])
@@ -108,16 +121,94 @@ begin :: proc {
 }
 @(private)
 begin_f32 :: proc(ctx: ^Context, width: f32, height: f32, dt: f32 = 0) {
-	_begin(ctx, width, height, dt)
+	_begin(ctx, width, height, input_from_raylib(), 1, dt)
 }
 @(private)
 begin_int :: proc(ctx: ^Context, #any_int width, height: int, dt: f32 = 0) {
-	_begin(ctx, f32(width), f32(height), dt)
+	_begin(ctx, f32(width), f32(height), input_from_raylib(), 1, dt)
+}
+
+// Begin UI declaration with an application-provided input snapshot.
+begin_with_input :: proc {
+	begin_with_input_f32,
+	begin_with_input_int,
+}
+
+begin_with_input_f32 :: proc(ctx: ^Context, width, height: f32, input: InputState, dt: f32 = 0) {
+	_begin(ctx, width, height, input, 1, dt)
+}
+
+begin_with_input_int :: proc(ctx: ^Context, #any_int width, height: int, input: InputState, dt: f32 = 0) {
+	_begin(ctx, f32(width), f32(height), input, 1, dt)
+}
+
+// Begin UI declaration using a design viewport. Fixed pixel values and fonts
+// are scaled uniformly to fit the current viewport.
+begin_responsive :: proc {
+	begin_responsive_f32,
+	begin_responsive_int,
+}
+
+begin_responsive_f32 :: proc(
+	ctx: ^Context,
+	width, height: f32,
+	design_width: f32 = 1280,
+	design_height: f32 = 800,
+	dt: f32 = 0,
+) {
+	scale := min(width / design_width, height / design_height)
+	_begin(ctx, width, height, input_from_raylib(), max(scale, 0.01), dt)
+}
+
+begin_responsive_int :: proc(
+	ctx: ^Context,
+	#any_int width, height: int,
+	design_width: f32 = 1280,
+	design_height: f32 = 800,
+	dt: f32 = 0,
+) {
+	begin_responsive_f32(ctx, f32(width), f32(height), design_width, design_height, dt)
+}
+
+begin_responsive_with_input :: proc {
+	begin_responsive_with_input_f32,
+	begin_responsive_with_input_int,
+}
+
+begin_responsive_with_input_f32 :: proc(
+	ctx: ^Context,
+	width, height: f32,
+	input: InputState,
+	design_width: f32 = 1280,
+	design_height: f32 = 800,
+	dt: f32 = 0,
+) {
+	scale := min(width / design_width, height / design_height)
+	_begin(ctx, width, height, input, max(scale, 0.01), dt)
+}
+
+begin_responsive_with_input_int :: proc(
+	ctx: ^Context,
+	#any_int width, height: int,
+	input: InputState,
+	design_width: f32 = 1280,
+	design_height: f32 = 800,
+	dt: f32 = 0,
+) {
+	begin_responsive_with_input_f32(ctx, f32(width), f32(height), input, design_width, design_height, dt)
 }
 
 @(private)
-_begin :: proc(ctx: ^Context, width: f32, height: f32, dt: f32) {
+_begin :: proc(ctx: ^Context, width, height: f32, input: InputState, scale: f32, dt: f32) {
 	current_context = ctx
+	ctx.input = input
+	ctx.scale = scale
+	ctx.activated_id = ctx.requested_activation_id
+	ctx.requested_activation_id = 0
+	if ctx.requested_focus_id != 0 {
+		ctx.focus_id = ctx.requested_focus_id
+		ctx.requested_focus_id = 0
+	}
 
 	ctx.frame += 1
 

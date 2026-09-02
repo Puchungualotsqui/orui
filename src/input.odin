@@ -1,9 +1,122 @@
 package orui
 
+import "core:c"
+
 import "core:math/linalg"
 import "core:strings"
 import "core:unicode/utf8"
 import rl "vendor:raylib"
+
+MAX_INPUT_KEYS :: 512
+MAX_GAMEPADS :: 4
+MAX_GAMEPAD_BUTTONS :: 16
+MAX_GAMEPAD_AXES :: 8
+
+ControllerButton :: enum u8 {
+	South,
+	East,
+	West,
+	North,
+	Back,
+	Guide,
+	Start,
+	Left_Stick,
+	Right_Stick,
+	Left_Shoulder,
+	Right_Shoulder,
+	DPad_Up,
+	DPad_Right,
+	DPad_Down,
+	DPad_Left,
+}
+
+ControllerAxis :: enum u8 {
+	Left_X,
+	Left_Y,
+	Right_X,
+	Right_Y,
+	Left_Trigger,
+	Right_Trigger,
+}
+
+ControllerInput :: struct {
+	connected:       bool,
+	buttons_down:    [MAX_GAMEPAD_BUTTONS]bool,
+	buttons_pressed: [MAX_GAMEPAD_BUTTONS]bool,
+	buttons_released:[MAX_GAMEPAD_BUTTONS]bool,
+	axes:            [MAX_GAMEPAD_AXES]f32,
+}
+
+InputState :: struct {
+	mouse_position:       rl.Vector2,
+	mouse_left_down:      bool,
+	mouse_left_pressed:   bool,
+	mouse_left_released:  bool,
+	mouse_wheel:          rl.Vector2,
+	keys_down:            [MAX_INPUT_KEYS]bool,
+	keys_pressed:         [MAX_INPUT_KEYS]bool,
+	keys_repeated:        [MAX_INPUT_KEYS]bool,
+	characters:           [32]rune,
+	character_count:      int,
+	clipboard_text:       string,
+	controllers:          [MAX_GAMEPADS]ControllerInput,
+}
+
+input_from_raylib :: proc() -> InputState {
+	input: InputState
+	input.mouse_position = rl.GetMousePosition()
+	input.mouse_left_down = rl.IsMouseButtonDown(.LEFT)
+	input.mouse_left_pressed = rl.IsMouseButtonPressed(.LEFT)
+	input.mouse_left_released = rl.IsMouseButtonReleased(.LEFT)
+	input.mouse_wheel = rl.GetMouseWheelMoveV()
+
+	for i in 0 ..< MAX_INPUT_KEYS {
+		key := rl.KeyboardKey(i)
+		input.keys_down[i] = rl.IsKeyDown(key)
+		input.keys_pressed[i] = rl.IsKeyPressed(key)
+		input.keys_repeated[i] = rl.IsKeyPressedRepeat(key)
+	}
+
+	for gamepad_index in 0 ..< MAX_GAMEPADS {
+		gamepad := c.int(gamepad_index)
+		controller := &input.controllers[gamepad_index]
+		controller.connected = rl.IsGamepadAvailable(gamepad)
+		if !controller.connected {
+			continue
+		}
+		for button_index in 0 ..< MAX_GAMEPAD_BUTTONS {
+			button := rl.GamepadButton(button_index)
+			controller.buttons_down[button_index] = rl.IsGamepadButtonDown(gamepad, button)
+			controller.buttons_pressed[button_index] = rl.IsGamepadButtonPressed(gamepad, button)
+			controller.buttons_released[button_index] = rl.IsGamepadButtonReleased(gamepad, button)
+		}
+		for axis_index in 0 ..< MAX_GAMEPAD_AXES {
+			controller.axes[axis_index] = rl.GetGamepadAxisMovement(gamepad, rl.GamepadAxis(axis_index))
+		}
+	}
+
+	return input
+}
+
+controller_button_down :: proc(input: InputState, button: ControllerButton, gamepad := 0) -> bool {
+	if gamepad < 0 || gamepad >= MAX_GAMEPADS do return false
+	return input.controllers[gamepad].buttons_down[int(button)]
+}
+
+controller_button_pressed :: proc(input: InputState, button: ControllerButton, gamepad := 0) -> bool {
+	if gamepad < 0 || gamepad >= MAX_GAMEPADS do return false
+	return input.controllers[gamepad].buttons_pressed[int(button)]
+}
+
+controller_button_released :: proc(input: InputState, button: ControllerButton, gamepad := 0) -> bool {
+	if gamepad < 0 || gamepad >= MAX_GAMEPADS do return false
+	return input.controllers[gamepad].buttons_released[int(button)]
+}
+
+controller_axis :: proc(input: InputState, axis: ControllerAxis, gamepad := 0) -> f32 {
+	if gamepad < 0 || gamepad >= MAX_GAMEPADS do return 0
+	return input.controllers[gamepad].axes[int(axis)]
+}
 
 TEXT_MULTI_CLICK_TIME: f64 : 0.5
 TEXT_MULTI_CLICK_DISTANCE: f32 : 6
@@ -19,11 +132,11 @@ handle_input_state :: proc(ctx: ^Context) {
 
 	sync_focus_element(ctx)
 
-	position := rl.GetMousePosition()
-	mouse_down := rl.IsMouseButtonDown(.LEFT)
-	pressed := rl.IsMouseButtonPressed(.LEFT)
-	released := rl.IsMouseButtonReleased(.LEFT)
-	scroll := rl.GetMouseWheelMoveV()
+	position := ctx.input.mouse_position
+	mouse_down := ctx.input.mouse_left_down
+	pressed := ctx.input.mouse_left_pressed
+	released := ctx.input.mouse_left_released
+	scroll := ctx.input.mouse_wheel
 
 	ctx.prev_focus_id = ctx.focus_id
 	ctx.hover[current].count = 0
@@ -128,11 +241,15 @@ handle_input_state :: proc(ctx: ^Context) {
 				ctx.active[current].count += 1
 
 				if pressed {
+					if element.focusable {
+						ctx.focus = ctx.sorted[i]
+						ctx.focus_id = element.id
+					}
 					if element.editable {
 						if ctx.focus == ctx.sorted[i] &&
 						   (ctx.selecting ||
-								   rl.IsKeyDown(.LEFT_SHIFT) ||
-								   rl.IsKeyDown(.RIGHT_SHIFT)) {
+							   key_down(ctx, .LEFT_SHIFT) ||
+							   key_down(ctx, .RIGHT_SHIFT)) {
 							// handle text selection with drag or shift click
 							ctx.text_selection_mode = .Character
 							ctx.text_selection.end = text_caret_from_point(ctx, element, position)
@@ -146,7 +263,7 @@ handle_input_state :: proc(ctx: ^Context) {
 							ctx.selecting = true
 							start_text_click_selection(ctx, element, position, click_count)
 						}
-					} else if ctx.focus != 0 {
+					} else if !element.focusable && ctx.focus != 0 {
 						clear_focus(ctx)
 					} else {
 						clear_text_click_state(ctx)
@@ -179,7 +296,144 @@ handle_input_state :: proc(ctx: ^Context) {
 		ctx.selecting = false
 	}
 
+	handle_focus_navigation(ctx, elements)
 	handle_keyboard_input(ctx)
+}
+
+@(private)
+handle_focus_navigation :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element) {
+	ctx.back_requested =
+		key_pressed(ctx, .ESCAPE) ||
+		controller_button_pressed(ctx.input, .East)
+
+		// Keyboard and controller navigation makes focus visible. Mouse focus is
+		// still assigned above, so applications can style both consistently.
+	tab := key_pressed(ctx, .TAB)
+	shift := key_down(ctx, .LEFT_SHIFT) || key_down(ctx, .RIGHT_SHIFT)
+	ctx.navigation_direction = 0
+	if tab {
+		move_focus_linear(ctx, elements, shift ? -1 : 1)
+	} else {
+		direction: i8 = 0
+		axis_x := controller_axis(ctx.input, .Left_X)
+		axis_y := controller_axis(ctx.input, .Left_Y)
+		axis_pressed_left := axis_x < -0.6 && ctx.navigation_axis[0] >= -0.6
+		axis_pressed_right := axis_x > 0.6 && ctx.navigation_axis[0] <= 0.6
+		axis_pressed_up := axis_y < -0.6 && ctx.navigation_axis[1] >= -0.6
+		axis_pressed_down := axis_y > 0.6 && ctx.navigation_axis[1] <= 0.6
+		ctx.navigation_axis = {axis_x, axis_y}
+		if key_pressed(ctx, .LEFT) || controller_button_pressed(ctx.input, .DPad_Left) || axis_pressed_left {
+			direction = 1
+		} else if key_pressed(ctx, .RIGHT) || controller_button_pressed(ctx.input, .DPad_Right) || axis_pressed_right {
+			direction = 2
+		} else if key_pressed(ctx, .UP) || controller_button_pressed(ctx.input, .DPad_Up) || axis_pressed_up {
+			direction = 3
+		} else if key_pressed(ctx, .DOWN) || controller_button_pressed(ctx.input, .DPad_Down) || axis_pressed_down {
+			direction = 4
+		}
+		if direction != 0 {
+			current_index, found := element_index_by_id(ctx, previous_buffer(ctx), ctx.focus_id)
+			if found && elements[current_index].adjustable {
+				ctx.navigation_direction = direction
+			} else {
+				move_focus_direction(ctx, elements, direction)
+			}
+		}
+	}
+
+	if (key_pressed(ctx, .ENTER) || key_pressed(ctx, .SPACE) ||
+		controller_button_pressed(ctx.input, .South)) && ctx.focus_id != 0 {
+		ctx.activated_id = ctx.focus_id
+	}
+}
+
+@(private)
+move_focus_linear :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element, direction: int) {
+	count := ctx.element_count[previous_buffer(ctx)]
+	current_index: i32 = -1
+	for i: i32 = 1; i < count; i += 1 {
+		if elements[i].id == ctx.focus_id {
+			current_index = i
+			break
+		}
+	}
+
+	if current_index < 0 {
+		for i: i32 = 1; i < count; i += 1 {
+			if elements[i].focusable && elements[i].disabled != .True {
+				ctx.focus = i
+				ctx.focus_id = elements[i].id
+				return
+			}
+		}
+		return
+	}
+
+	for step := 1; step < int(count); step += 1 {
+		candidate := int(current_index) + direction * step
+		for candidate < 1 {
+			candidate += int(count) - 1
+		}
+		for candidate >= int(count) {
+			candidate -= int(count) - 1
+		}
+		item := &elements[candidate]
+		if item.focusable && item.disabled != .True {
+			ctx.focus = i32(candidate)
+			ctx.focus_id = item.id
+			return
+		}
+	}
+
+}
+
+@(private)
+move_focus_direction :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element, direction: i8) {
+	count := ctx.element_count[previous_buffer(ctx)]
+	current_index, found := element_index_by_id(ctx, previous_buffer(ctx), ctx.focus_id)
+	if !found || current_index == 0 {
+		move_focus_linear(ctx, elements, 1)
+		return
+	}
+
+	current := &elements[current_index]
+	current_center := current._position + current._size * 0.5
+	best: i32 = -1
+	best_score: f32 = 1e30
+	for i: i32 = 1; i < count; i += 1 {
+		candidate := &elements[i]
+		if !candidate.focusable || candidate.disabled == .True || i == current_index {
+			continue
+		}
+		center := candidate._position + candidate._size * 0.5
+		dx := center.x - current_center.x
+		dy := center.y - current_center.y
+		primary: f32
+		secondary: f32
+		switch direction {
+		case 1:
+			if dx >= 0 do continue
+			primary, secondary = -dx, abs(dy)
+		case 2:
+			if dx <= 0 do continue
+			primary, secondary = dx, abs(dy)
+		case 3:
+			if dy >= 0 do continue
+			primary, secondary = -dy, abs(dx)
+		case 4:
+			if dy <= 0 do continue
+			primary, secondary = dy, abs(dx)
+		}
+		score := primary * 1000 + secondary
+		if score < best_score {
+			best_score = score
+			best = i
+		}
+	}
+	if best >= 0 {
+		ctx.focus = best
+		ctx.focus_id = elements[best].id
+	}
 }
 
 @(private)
@@ -273,44 +527,56 @@ update_text_drag_selection :: proc(ctx: ^Context, element: ^Element, position: r
 }
 
 @(private)
+insert_input_character :: proc(ctx: ^Context, element: ^Element, char: rune) -> bool {
+	if char == '\r' || char == '\n' {
+		return true
+	}
+	if has_text_selection(ctx) {
+		ctx.caret_index = delete_text_selection(ctx, element)
+	}
+	char_bytes, char_len := utf8.encode_rune(char)
+	bytes_inserted := insert_bytes(
+		element.text_input,
+		ctx.caret_index,
+		string(char_bytes[:char_len]),
+	)
+	element.text = strings.to_string(element.text_input^)
+	set_caret_index(ctx, element, ctx.caret_index + bytes_inserted)
+	return bytes_inserted > 0
+}
+
+@(private)
 handle_keyboard_input :: proc(ctx: ^Context) {
 	elements := &ctx.elements[previous_buffer(ctx)]
 	if ctx.focus != 0 {
 		element := &elements[ctx.focus]
-		if !element.editable {
+		if key_pressed(ctx, .ESCAPE) {
 			clear_focus(ctx)
-		} else if rl.IsKeyPressed(.ENTER) && element.overflow == .Visible {
+		} else if element.editable && key_pressed(ctx, .ENTER) && element.overflow == .Visible {
 			clear_focus(ctx)
-		} else {
+		} else if element.editable {
 			text_input := element.text_input
-			ctrl_down := rl.IsKeyDown(.LEFT_CONTROL) || rl.IsKeyDown(.RIGHT_CONTROL)
-			cmd_down := rl.IsKeyDown(.LEFT_SUPER) || rl.IsKeyDown(.RIGHT_SUPER)
-			shift_down := rl.IsKeyDown(.LEFT_SHIFT) || rl.IsKeyDown(.RIGHT_SHIFT)
+			ctrl_down := key_down(ctx, .LEFT_CONTROL) || key_down(ctx, .RIGHT_CONTROL)
+			cmd_down := key_down(ctx, .LEFT_SUPER) || key_down(ctx, .RIGHT_SUPER)
+			shift_down := key_down(ctx, .LEFT_SHIFT) || key_down(ctx, .RIGHT_SHIFT)
 
 			when ODIN_OS == .Darwin {
-				word_modifier := rl.IsKeyDown(.LEFT_ALT) || rl.IsKeyDown(.RIGHT_ALT)
+				word_modifier := key_down(ctx, .LEFT_ALT) || key_down(ctx, .RIGHT_ALT)
 			} else {
 				word_modifier := ctrl_down
 			}
 
-			for char := rl.GetCharPressed(); char != 0; char = rl.GetCharPressed() {
-				if char == '\r' || char == '\n' {
-					continue
+			if ctx.input.character_count > 0 {
+				for i := 0; i < min(ctx.input.character_count, len(ctx.input.characters)); i += 1 {
+					if !insert_input_character(ctx, element, ctx.input.characters[i]) {
+						break
+					}
 				}
-				if has_text_selection(ctx) {
-					ctx.caret_index = delete_text_selection(ctx, element)
-				}
-				char_bytes, char_len := utf8.encode_rune(char)
-				bytes_inserted := insert_bytes(
-					text_input,
-					ctx.caret_index,
-					string(char_bytes[:char_len]),
-				)
-				element.text = strings.to_string(text_input^)
-				set_caret_index(ctx, element, ctx.caret_index + bytes_inserted)
-
-				if bytes_inserted == 0 {
-					break
+			} else {
+				for char := rl.GetCharPressed(); char != 0; char = rl.GetCharPressed() {
+					if !insert_input_character(ctx, element, char) {
+						break
+					}
 				}
 			}
 
@@ -342,7 +608,7 @@ handle_keyboard_input :: proc(ctx: ^Context) {
 				set_caret_index(ctx, element, next)
 			}
 
-			if rl.IsKeyPressed(.HOME) {
+			if key_pressed(ctx, .HOME) {
 				next_index := 0
 				if ctrl_down || cmd_down || element.overflow == .Visible {
 					next_index = 0
@@ -360,7 +626,7 @@ handle_keyboard_input :: proc(ctx: ^Context) {
 				set_caret_index(ctx, element, next_index)
 			}
 
-			if rl.IsKeyPressed(.END) {
+			if key_pressed(ctx, .END) {
 				next_index := len(text_input.buf)
 				if ctrl_down || cmd_down || element.overflow == .Visible {
 					next_index = len(text_input.buf)
@@ -467,13 +733,13 @@ handle_keyboard_input :: proc(ctx: ^Context) {
 				set_caret_index(ctx, element, caret + bytes_inserted)
 			}
 
-			if rl.IsKeyPressed(.A) && (ctrl_down || cmd_down) {
+			if key_pressed(ctx, .A) && (ctrl_down || cmd_down) {
 				ctx.text_selection.start = 0
 				ctx.text_selection.end = len(text_input.buf)
 				set_caret_index(ctx, element, len(text_input.buf))
 			}
 
-			if rl.IsKeyPressed(.C) && (ctrl_down || cmd_down) {
+			if key_pressed(ctx, .C) && (ctrl_down || cmd_down) {
 				if has_text_selection(ctx) {
 					a, b := get_text_selection(ctx)
 					selected_text := string(text_input.buf[a:b])
@@ -486,7 +752,7 @@ handle_keyboard_input :: proc(ctx: ^Context) {
 				}
 			}
 
-			if rl.IsKeyPressed(.X) && (ctrl_down || cmd_down) {
+			if key_pressed(ctx, .X) && (ctrl_down || cmd_down) {
 				if has_text_selection(ctx) {
 					a, b := get_text_selection(ctx)
 					selected_text := string(text_input.buf[a:b])
@@ -504,9 +770,14 @@ handle_keyboard_input :: proc(ctx: ^Context) {
 			}
 
 			if key_pressed(ctx, .V) && (ctrl_down || cmd_down) {
-				clipboard_text := rl.GetClipboardText()
-				if clipboard_text != nil {
-					text := string(clipboard_text)
+				text := ctx.input.clipboard_text
+				if len(text) == 0 {
+					clipboard_text := rl.GetClipboardText()
+					if clipboard_text != nil {
+						text = string(clipboard_text)
+					}
+				}
+				if len(text) > 0 {
 					caret := ctx.caret_index
 					if has_text_selection(ctx) {
 						caret = delete_text_selection(ctx, element)
@@ -585,8 +856,15 @@ point_in_element :: proc(p: rl.Vector2, element: ^Element) -> bool {
 }
 
 @(private)
+key_down :: proc(ctx: ^Context, key: rl.KeyboardKey) -> bool {
+	index := int(key)
+	return index >= 0 && index < MAX_INPUT_KEYS && ctx.input.keys_down[index]
+}
+
 key_pressed :: proc(ctx: ^Context, key: rl.KeyboardKey) -> bool {
-	return rl.IsKeyPressed(key) || rl.IsKeyPressedRepeat(key)
+	index := int(key)
+	return index >= 0 && index < MAX_INPUT_KEYS &&
+		(ctx.input.keys_pressed[index] || ctx.input.keys_repeated[index])
 }
 
 @(private)

@@ -340,6 +340,10 @@ ElementConfig :: struct {
 
 	// Whether the element can be interacted with. Inherited from parent by default.
 	disabled:         InheritedBool,
+	// Whether keyboard/controller navigation may focus this element.
+	focusable:        bool,
+	// Whether directional navigation should be delivered to this element.
+	adjustable:       bool,
 	// Whether the element will consume mouse interactions, blocking elements below it from receiving them.
 	// Inherited from parent by default.
 	block:            InheritedBool,
@@ -423,6 +427,8 @@ Element :: struct {
 
 	// input
 	disabled:          InheritedBool,
+	focusable:         bool,
+	adjustable:        bool,
 	block:             InheritedBool,
 	capture:           InheritedBool,
 	cursor:            CursorHint,
@@ -464,26 +470,27 @@ configure_element :: proc(
 	config: ElementConfig,
 ) {
 	allocator := ctx.allocator[current_buffer(ctx)]
+	scale := ctx.scale > 0 ? ctx.scale : 1
 
 	// layout
 	element.layout = config.layout
 	element.direction = config.direction
-	element.position = config.position
+	element.position = scaled_position(config.position, scale)
 	element.placement = config.placement
-	element.bounds = config.bounds
-	element.width = config.width
-	element.height = config.height
-	element.padding = config.padding
-	element.margin = config.margin
-	element.border = config.border
-	element.gap = config.gap
+	element.bounds = scaled_bounds(config.bounds, scale)
+	element.width = scaled_size(config.width, scale)
+	element.height = scaled_size(config.height, scale)
+	element.padding = scaled_edges(config.padding, scale)
+	element.margin = scaled_edges(config.margin, scale)
+	element.border = scaled_edges(config.border, scale)
+	element.gap = config.gap * scale
 	element.align_main = config.align_main
 	element.align_cross = config.align_cross
 	element.align_content = config.align_content
 	element.flex_wrap = config.flex_wrap
 	element.overflow = config.overflow
 	element.layer = config.layer
-	element.clip = config.clip
+	element.clip = scaled_clip(config.clip, scale)
 
 	// grid
 	if element.layout == .Grid {
@@ -493,13 +500,17 @@ configure_element :: proc(
 		col_sizes := min(int(config.cols), len(config.col_sizes))
 		if col_sizes > 0 {
 			element.col_sizes = make([]Size, col_sizes, allocator)
-			copy(element.col_sizes, config.col_sizes[:col_sizes])
+			for i in 0 ..< col_sizes {
+				element.col_sizes[i] = scaled_size(config.col_sizes[i], scale)
+			}
 		}
 
 		row_sizes := min(int(config.rows), len(config.row_sizes))
 		if row_sizes > 0 {
 			element.row_sizes = make([]Size, row_sizes, allocator)
-			copy(element.row_sizes, config.row_sizes[:row_sizes])
+			for i in 0 ..< row_sizes {
+				element.row_sizes[i] = scaled_size(config.row_sizes[i], scale)
+			}
 		}
 
 		buffer := current_buffer(ctx)
@@ -516,8 +527,8 @@ configure_element :: proc(
 		grid_state_init(element, state)
 	}
 
-	element.col_gap = config.col_gap
-	element.row_gap = config.row_gap
+	element.col_gap = config.col_gap * scale
+	element.row_gap = config.row_gap * scale
 	element.col_span = config.col_span
 	element.row_span = config.row_span
 
@@ -525,14 +536,14 @@ configure_element :: proc(
 	element.color = config.color
 	element.background_color = config.background_color
 	element.border_color = config.border_color
-	element.corner_radius = config.corner_radius
+	element.corner_radius = scaled_corners(config.corner_radius, scale)
 
 	// text
 	element.has_text = config.has_text
 	element.text = config.text
 	element.font = config.font
-	element.font_size = config.font_size
-	element.letter_spacing = config.letter_spacing
+	element.font_size = config.font_size * scale
+	element.letter_spacing = config.letter_spacing * scale
 	element.line_height = config.line_height
 	element.whitespace = config.whitespace
 	element.text_input = config.text_input
@@ -547,15 +558,74 @@ configure_element :: proc(
 
 	// input
 	element.disabled = config.disabled == .Inherit ? parent.disabled : config.disabled
+	element.focusable = config.focusable
+	element.adjustable = config.adjustable
 	element.block = config.block == .Inherit ? parent.block : config.block
 	element.capture = config.capture == .Inherit ? parent.capture : config.capture
 	element.cursor = config.cursor == .Inherit ? parent.cursor : config.cursor
 	element.editable = config.editable
 
 	// scroll
+	// Scroll offsets are runtime state and are already in viewport pixels.
 	element.scroll = config.scroll
 
 	element.custom_event = config.custom_event
+}
+
+@(private)
+scaled_size :: proc(size: Size, scale: f32) -> Size {
+	result := size
+	if size.type == .Fixed {
+		result.value *= scale
+	}
+	if size.min > 0 {
+		result.min *= scale
+	}
+	if size.max > 0 {
+		result.max *= scale
+	}
+	return result
+}
+
+@(private)
+scaled_edges :: proc(edges: Edges, scale: f32) -> Edges {
+	return {edges.top * scale, edges.right * scale, edges.bottom * scale, edges.left * scale}
+}
+
+@(private)
+scaled_corners :: proc(corners: Corners, scale: f32) -> Corners {
+	return {
+		corners.top_left * scale,
+		corners.top_right * scale,
+		corners.bottom_right * scale,
+		corners.bottom_left * scale,
+	}
+}
+
+@(private)
+scaled_position :: proc(position: Position, scale: f32) -> Position {
+	result := position
+	result.value *= scale
+	return result
+}
+
+@(private)
+scaled_bounds :: proc(bounds: Bounds, scale: f32) -> Bounds {
+	result := bounds
+	result.padding *= scale
+	return result
+}
+
+@(private)
+scaled_clip :: proc(clip: Clip, scale: f32) -> Clip {
+	result := clip
+	if clip.type == .Manual {
+		result.rectangle.x = i32(f32(clip.rectangle.x) * scale)
+		result.rectangle.y = i32(f32(clip.rectangle.y) * scale)
+		result.rectangle.width = i32(f32(clip.rectangle.width) * scale)
+		result.rectangle.height = i32(f32(clip.rectangle.height) * scale)
+	}
+	return result
 }
 
 to_id :: proc {

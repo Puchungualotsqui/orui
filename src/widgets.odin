@@ -67,6 +67,7 @@ text_input :: proc(
 	element.text_input = text
 	element.text = string(text.buf[:])
 	element.editable = true
+	element.focusable = true
 	element.whitespace = .Preserve
 	element.cursor = .IBeam
 
@@ -153,7 +154,7 @@ scrollbar :: proc(
 		scroll_offset := scroll_container.scroll.offset
 
 		if handle_config.direction == .TopToBottom {
-			mouse_position := rl.GetMousePosition().y
+			mouse_position := ctx.input.mouse_position.y
 			relative_position :=
 				mouse_position - scrollbar_background._position.y - handle_size.y / 2
 			track_range := background_size.y - handle_size.y
@@ -162,7 +163,7 @@ scrollbar :: proc(
 			scroll_offset.y = min_y + percent * (max_y - min_y)
 			set_scroll_offset(parent, scroll_offset)
 		} else {
-			mouse_position := rl.GetMousePosition().x
+			mouse_position := ctx.input.mouse_position.x
 			relative_position :=
 				mouse_position - scrollbar_background._position.x - handle_size.x / 2
 			track_range := background_size.x - handle_size.x
@@ -174,4 +175,374 @@ scrollbar :: proc(
 	}
 
 	end_element()
+}
+
+Theme :: struct {
+	button_background: rl.Color,
+	button_hover:      rl.Color,
+	button_active:     rl.Color,
+	button_focused:    rl.Color,
+	button_disabled:   rl.Color,
+	selected:          rl.Color,
+	track:             rl.Color,
+	handle:            rl.Color,
+	text:              rl.Color,
+	text_disabled:     rl.Color,
+	border:            rl.Color,
+	focus_border:      rl.Color,
+	dialog_backdrop:   rl.Color,
+}
+
+default_theme :: proc() -> Theme {
+	return {
+		button_background = {55, 65, 80, 255},
+		button_hover = {75, 90, 110, 255},
+		button_active = {40, 50, 65, 255},
+		button_focused = {85, 105, 135, 255},
+		button_disabled = {55, 55, 60, 180},
+		selected = {55, 105, 155, 255},
+		track = {45, 50, 60, 255},
+		handle = {125, 170, 220, 255},
+		text = rl.WHITE,
+		text_disabled = {160, 160, 165, 255},
+		border = {100, 110, 125, 255},
+		focus_border = {150, 205, 255, 255},
+		dialog_backdrop = {0, 0, 0, 150},
+	}
+}
+
+set_theme :: proc(ctx: ^Context, theme: Theme) {
+	ctx.theme = theme
+}
+
+// A focusable text button. It returns true for either a pointer click or a
+// keyboard/controller activation.
+button :: proc(
+	widget_id: Id,
+	text: string,
+	config: ElementConfig,
+	modifiers: ..ElementModifier,
+) -> bool {
+	ctx := current_context
+	c := config
+	c.focusable = true
+	if c.font_size == 0 {
+		c.font_size = 16
+	}
+	if c.color == {} {
+		c.color = (c.disabled == .True || is_disabled(widget_id)) ? ctx.theme.text_disabled : ctx.theme.text
+	}
+	if c.border == {} {
+		c.border = border(1)
+	}
+	if c.border_color == {} {
+		c.border_color = focused(widget_id) ? ctx.theme.focus_border : ctx.theme.border
+	}
+	if c.corner_radius == {} {
+		c.corner_radius = corner(4)
+	}
+	if c.cursor == .Inherit {
+		c.cursor = .Pointing_Hand
+	}
+	if c.background_color == {} {
+		if c.disabled == .True || is_disabled(widget_id) {
+			c.background_color = ctx.theme.button_disabled
+		} else if active(widget_id) {
+			c.background_color = ctx.theme.button_active
+		} else if focused(widget_id) {
+			c.background_color = ctx.theme.button_focused
+		} else if hovered(widget_id) {
+			c.background_color = ctx.theme.button_hover
+		} else {
+			c.background_color = ctx.theme.button_background
+		}
+	}
+
+	clicked := label(id(widget_id), text, c, ..modifiers)
+	return clicked || activated(widget_id)
+}
+
+// A horizontal value slider. The value is clamped to [low, high].
+slider :: proc(
+	widget_id: Id,
+	value: ^f32,
+	low, high: f32,
+	config: ElementConfig,
+	modifiers: ..ElementModifier,
+) -> bool {
+	ctx := current_context
+	c := config
+	c.focusable = true
+	c.adjustable = true
+	c.capture = .True
+	if c.width.type == .Fit {
+		c.width = fixed(240)
+	}
+	if c.height.type == .Fit {
+		c.height = fixed(24)
+	}
+	if c.background_color == {} {
+		c.background_color = ctx.theme.track
+	}
+	if c.corner_radius == {} {
+		c.corner_radius = corner(4)
+	}
+	if c.cursor == .Inherit {
+		c.cursor = .Resize_EW
+	}
+	if c.position.type == .Auto {
+		c.position = {.Relative, {}}
+	}
+
+	old_value := value^
+	minimum := min(low, high)
+	maximum := max(low, high)
+	if value^ < minimum {
+		value^ = minimum
+	}
+	if value^ > maximum {
+		value^ = maximum
+	}
+
+	id(widget_id)
+	element(widget_id, c, ..modifiers)
+
+	rect := bounding_rect(widget_id)
+	if c.disabled != .True && !is_disabled(widget_id) && (captured(widget_id) ||
+		(ctx.input.mouse_left_down && hovered(widget_id))) && rect.width > 0 {
+		scale := ui_scale(ctx)
+		logical_x := (ctx.input.mouse_position.x - rect.x) / scale
+		logical_width := rect.width / scale
+		t := clamp(logical_x / logical_width, 0, 1)
+		value^ = minimum + (maximum - minimum) * t
+	}
+	if c.disabled != .True && !is_disabled(widget_id) && focused(widget_id) &&
+		ctx.navigation_direction != 0 && maximum > minimum {
+		step := (maximum - minimum) / 20
+		if ctx.navigation_direction == 1 || ctx.navigation_direction == 3 {
+			value^ = max(minimum, value^ - step)
+		} else {
+			value^ = min(maximum, value^ + step)
+		}
+	}
+
+	t := maximum > minimum ? clamp((value^ - minimum) / (maximum - minimum), 0, 1) : 0
+	logical_width := rect.width / ui_scale(ctx)
+	handle_x := t * max(logical_width - 12, 0)
+	{container(
+			id(to_id(widget_id, 1)),
+			{
+				position = {.Absolute, {handle_x, 0}},
+				width = fixed(12),
+				height = grow(),
+				background_color = focused(widget_id) ? ctx.theme.focus_border : ctx.theme.handle,
+				corner_radius = corner(4),
+				block = .False,
+			},
+		)}
+	end_element()
+	return value^ != old_value || activated(widget_id)
+}
+
+// A checkbox with a focusable row and a selected visual state.
+checkbox :: proc(
+	widget_id: Id,
+	text: string,
+	checked: ^bool,
+	config: ElementConfig,
+	modifiers: ..ElementModifier,
+) -> bool {
+	ctx := current_context
+	c := config
+	c.focusable = true
+	c.width = c.width.type == .Fit ? fixed(220) : c.width
+	c.height = c.height.type == .Fit ? fixed(32) : c.height
+	c.cursor = c.cursor == .Inherit ? .Pointing_Hand : c.cursor
+	changed := clicked(widget_id) || activated(widget_id)
+	{container(id(widget_id), c, ..modifiers)
+		{container(id(to_id(widget_id, 1)), {
+				width = fixed(22), height = fixed(22),
+				background_color = checked^ ? ctx.theme.selected : ctx.theme.button_background,
+				border = border(1), border_color = ctx.theme.border,
+				corner_radius = corner(4), disabled = .True,
+			})
+			label(id(to_id(widget_id, 2)), checked^ ? "✓" : "", {
+				font_size = 16, color = ctx.theme.text, align = {.Center, .Center},
+				width = grow(), height = grow(), disabled = .True,
+			})
+		}
+		label(id(to_id(widget_id, 3)), text, {
+				font_size = 16,
+				color = c.disabled == .True ? ctx.theme.text_disabled : ctx.theme.text,
+				width = grow(), height = grow(), align = {.Start, .Center}, disabled = .True,
+			})
+	}
+	if changed && c.disabled != .True {
+		checked^ = !checked^
+		return true
+	}
+	return false
+}
+
+// A row of mutually exclusive tabs. Returns true when selected changes.
+tabs :: proc(
+	widget_id: Id,
+	labels: []string,
+	selected: ^int,
+	config: ElementConfig,
+) -> bool {
+	ctx := current_context
+	if len(labels) == 0 {
+		return false
+	}
+	selected^ = clamp(selected^, 0, len(labels) - 1)
+	changed := false
+	c := config
+	c.direction = .LeftToRight
+	{container(id(widget_id), c)
+		for label_text, i in labels {
+			button_config: ElementConfig = {
+				width = grow(), height = fit(), padding = padding(10, 6),
+				background_color = i == selected^ ? ctx.theme.selected : {},
+				color = ctx.theme.text,
+			}
+			if button(to_id(widget_id, i), label_text, button_config) {
+				if selected^ != i {
+					selected^ = i
+					changed = true
+				}
+			}
+		}
+	}
+	return changed
+}
+
+// A selectable popup list. It supports pointer, Tab/arrow focus navigation,
+// Enter/controller activation, and Escape/B controller back.
+dropdown :: proc(
+	widget_id: Id,
+	options: []string,
+	selected: ^int,
+	open: ^bool,
+	config: ElementConfig,
+) -> bool {
+	ctx := current_context
+	if len(options) == 0 {
+		return false
+	}
+	selected^ = clamp(selected^, 0, len(options) - 1)
+	changed := false
+	was_open := open^
+	label_text := options[selected^]
+	outer_config := config
+	outer_config.position = {.Relative, {}}
+	outer_config.background_color = {}
+	outer_config.border = {}
+	outer_config.border_color = {}
+	outer_config.height = fit()
+	outer_id := to_id(widget_id, 0)
+	popup_id := to_id(widget_id, 1)
+	{container(id(outer_id), outer_config)
+		if button(widget_id, label_text, config) {
+			open^ = !open^
+		}
+
+		if open^ {
+		{container(id(popup_id), {
+				position = {.Absolute, {}},
+				placement = placement(.Bottom, .Top),
+				bounds = {.Window, .Flip, 8},
+				width = config.width.type == .Fixed ? config.width : fixed(240),
+				layout = .Flex, direction = .TopToBottom, gap = 1,
+				padding = padding(4), layer = 100,
+			})
+			for option, i in options {
+				option_config: ElementConfig = {
+					width = grow(), height = fit(),
+					background_color = i == selected^ ? ctx.theme.selected : {},
+				}
+				if button(to_id(popup_id, i), option, option_config) {
+					selected^ = i
+					open^ = false
+					changed = true
+				}
+			}
+		}
+	}
+}
+if was_open && back_pressed() {
+		consume_back()
+		open^ = false
+	}
+	if was_open && !back_pressed() && ctx.input.mouse_left_released &&
+		!hovered(widget_id) && !hovered(popup_id) {
+		open^ = false
+	}
+	return changed
+}
+
+DialogResult :: enum {
+	None,
+	Confirmed,
+	Cancelled,
+}
+
+// A centered modal dialog. The caller owns the open state; the dialog consumes
+// Escape/B and returns the action taken by its buttons.
+dialog :: proc(
+	widget_id: Id,
+	title: string,
+	message: string,
+	open: ^bool,
+	config: ElementConfig,
+) -> DialogResult {
+	if !open^ {
+		return .None
+	}
+	ctx := current_context
+	result := DialogResult.None
+	backdrop: ElementConfig = {
+		position = {.Fixed, {}}, width = percent(1), height = percent(1),
+		layout = .Flex, align_main = .Center, align_cross = .Center,
+		background_color = ctx.theme.dialog_backdrop, layer = 1000,
+		capture = .True,
+	}
+	{container(id(widget_id), backdrop)
+		panel := config
+		panel.position = {.Relative, {}}
+		panel.width = panel.width.type == .Fit ? fixed(420) : panel.width
+		panel.height = panel.height.type == .Fit ? fit() : panel.height
+		panel.layout = .Flex
+		panel.direction = .TopToBottom
+		panel.padding = panel.padding == {} ? padding(20) : panel.padding
+		panel.gap = panel.gap == 0 ? 12 : panel.gap
+		panel.background_color = panel.background_color == {} ? ctx.theme.button_background : panel.background_color
+		{container(id(to_id(widget_id, 1)), panel)
+			label(id(to_id(widget_id, 2)), title, {font_size = 22, color = ctx.theme.text})
+			label(id(to_id(widget_id, 3)), message, {
+				font_size = 16, color = ctx.theme.text, width = grow(), overflow = .Wrap,
+			})
+			{container(id(to_id(widget_id, 4)), {
+					direction = .LeftToRight, width = grow(), height = fit(),
+					align_main = .End, gap = 8,
+				})
+				if button(to_id(widget_id, 5), "Cancel", {width = fit(), height = fit()}) {
+					result = .Cancelled
+				}
+				if button(to_id(widget_id, 6), "OK", {
+					width = fit(), height = fit(), background_color = ctx.theme.selected,
+				}) {
+					result = .Confirmed
+				}
+			}
+		}
+	}
+	if back_pressed() {
+		consume_back()
+		result = .Cancelled
+	}
+	if result != .None {
+		open^ = false
+	}
+	return result
 }

@@ -6,6 +6,12 @@ orui is an immediate mode UI library for odin and raylib, with support for flex 
 
 **Requires odin 2026-03 release or newer!**
 
+The controller-oriented catalog example can be run with:
+
+```sh
+odin run examples/catalog
+```
+
 <img src="examples/assets.png" width="48%" /><img src="examples/profiler.png" width="43%" />
 <img src="examples/skinning/screenshot.gif" width="45%" /><img src="examples/window/screenshot.gif" width="42%" />
 <img src="demo/test_scroll.gif" width="40%" /><img src="demo/test_animation.gif" width="44%">
@@ -28,6 +34,17 @@ Features:
 - Padding, margin, borders, rounded corners, overflow, clipping
 - Scroll (with mouse wheel)
   - Horizontal/vertical scrollbars
+- Input abstraction
+  - Raylib mouse, keyboard and gamepad polling
+  - Application-provided input snapshots for other backends and tests
+  - Keyboard and controller focus navigation
+  - Programmatic focus and activation
+  - Escape/B back handling and keyboard shortcut queries
+- Built-in widgets
+  - Button, slider, checkbox, tabs, dropdown and modal dialog
+  - Focused, disabled, hovered, active and selected states
+- Responsive scaling
+  - Design-viewport scaling with 1280x800 as the default
 - Images (textures)
   - Alignment
   - Content fit (fill, contain, cover, none, scale-down)
@@ -54,7 +71,6 @@ To do:
   - Placeholder (maybe)
   - Customise text select background colour
 - Other widgets (maybe)
-  - Slider
 - Grid row/column start (maybe)
 - Scroll with drag
 - Scroll momentum
@@ -70,6 +86,11 @@ To do:
   - [text_input](#text_inputid-buffer-config-modifiers)
   - [image](#imageid-config-modifiers)
   - [scrollbar](#scrollbarparent_id-background_config-handle_config-index--0)
+- [Input and controller support](#input-and-controller-support)
+- [Focus, activation and navigation](#focus-activation-and-navigation)
+- [Built-in widgets](#built-in-widgets)
+- [Theme and visual states](#theme-and-visual-states)
+- [Responsive scaling](#responsive-scaling)
 - [Other functions](#other-functions)
   - [hovered()](#hovered)
   - [active()](#active)
@@ -105,7 +126,7 @@ In your render loop:
 ```odin
 for !rl.WindowShouldClose() {
 	rl.BeginDrawing()
-	orui.begin(ctx, width, height)
+	orui.begin_responsive(ctx, rl.GetScreenWidth(), rl.GetScreenHeight())
 
 	// Declare UI here
 
@@ -119,6 +140,157 @@ for !rl.WindowShouldClose() {
 	}
 
 	rl.EndDrawing()
+	free_all(ctx.temp_allocator)
+}
+```
+
+For a non-Raylib backend, fill an `InputState` and use `begin_with_input`. To
+use controller/keyboard navigation, widgets should be declared with the
+built-in focusable widgets or with `focusable = true` in their config:
+
+```odin
+orui.begin_responsive_with_input(ctx, width, height, input)
+if orui.button(orui.id("save"), "Save", {}) {
+	save()
+}
+if orui.back_pressed() {
+	close_current_screen()
+}
+```
+
+Call `set_focus(ctx, id)` or `activate(ctx, id)` before the frame to control
+focus or trigger a widget programmatically. `shortcut_pressed(key)` and
+`shortcut_down(key)` expose the current keyboard snapshot.
+
+## Input and controller support
+
+orui represents input as an `InputState` snapshot. The normal `begin` and
+`begin_responsive` functions create this snapshot by polling Raylib:
+
+```odin
+input := orui.input_from_raylib()
+orui.begin_responsive_with_input(ctx, width, height, input)
+```
+
+This makes the UI input path independent from the backend. Applications can
+fill an `InputState` themselves for SDL, a custom platform layer, or tests.
+The snapshot contains mouse position/buttons/wheel, keyboard down/pressed/
+repeat state, text characters, clipboard text, and up to four controllers.
+
+```odin
+input: orui.InputState
+input.mouse_position = {100, 80}
+input.mouse_left_pressed = true
+input.controllers[0].connected = true
+input.controllers[0].buttons_pressed[int(orui.ControllerButton.South)] = true
+input.characters[0] = 'A'
+input.character_count = 1
+
+orui.begin_with_input(ctx, 1280, 800, input)
+```
+
+Use `input_from_raylib()` once per frame, not once per widget. The built-in
+Raylib adapter maps the semantic controller buttons as follows:
+
+| orui button | Typical Xbox/Steam Deck meaning |
+|---|---|
+| `South` | A / confirm |
+| `East` | B / back |
+| `West` | X |
+| `North` | Y |
+| `Left_Shoulder`, `Right_Shoulder` | LB/RB |
+| `DPad_Up`, `DPad_Right`, `DPad_Down`, `DPad_Left` | D-pad |
+
+The semantic axis values are available through `controller_axis`, including
+`Left_X`, `Left_Y`, `Right_X`, `Right_Y`, `Left_Trigger`, and `Right_Trigger`.
+Raylib gamepad polling is provided; Steam Input action sets and Steam-specific
+glyph APIs are outside orui's scope.
+
+`begin_with_input` preserves the current pixel coordinate behavior. The
+responsive variant is described below.
+
+## Focus, activation and navigation
+
+Any custom control that should be reachable from a keyboard or controller
+must set:
+
+```odin
+focusable = true
+```
+
+Built-in interactive widgets set this automatically. Focus is identified by
+the element's stable `Id` and is retained across immediate-mode frames.
+
+Navigation behavior:
+
+- `Tab` and `Shift+Tab` move through focusable elements in declaration order.
+- Arrow keys and the controller D-pad use spatial navigation.
+- The left stick produces directional navigation when it crosses its deadzone.
+- `Enter`, `Space`, and controller `South` activate the focused element.
+- Disabled elements are skipped.
+- Set `adjustable = true` for controls such as sliders that should receive
+  directional input instead of moving focus.
+
+A custom control can detect activation with:
+
+```odin
+orui.element(orui.id("custom"), {
+    focusable = true,
+})
+if orui.activated() {
+    perform_action()
+}
+orui.end_element()
+```
+
+The ID overloads are useful when the check is outside the declaration:
+
+```odin
+if orui.activated("custom") {
+    perform_action()
+}
+```
+
+Programmatic focus and activation are available through:
+
+```odin
+orui.set_focus(ctx, orui.to_id("search"))
+orui.set_focus_string(ctx, "search")
+
+orui.activate(ctx, orui.to_id("default button"))
+orui.activate_string(ctx, "default button")
+```
+
+These calls can be made before `begin` to request an operation for the next
+frame, or during the current frame before the target widget is declared.
+A missing focus target is cleared when the next input snapshot is processed.
+
+Escape and controller `East` generate one back request per frame:
+
+```odin
+if orui.back_pressed() {
+    close_current_screen()
+}
+```
+
+A nested widget can consume the request so that it does not reach the parent:
+
+```odin
+if orui.back_pressed() {
+    orui.consume_back()
+    popup_open = false
+}
+```
+
+Keyboard shortcuts use the current input snapshot and are independent of
+widget focus:
+
+```odin
+if orui.shortcut_pressed(.F5) {
+    reload_data()
+}
+if orui.shortcut_down(.LEFT_CONTROL) && orui.shortcut_pressed(.S) {
+    save()
 }
 ```
 
@@ -324,6 +496,223 @@ orui.scrollbar(orui.to_id("container id"), {
 })
 ```
 
+## Built-in widgets
+
+The built-in widgets are immediate-mode procedures. Their application state
+is passed by pointer and remains owned by the application:
+
+```odin
+orui.button(orui.id("save"), "Save", {})
+orui.slider(orui.id("volume"), &volume, 0, 1, {})
+orui.checkbox(orui.id("fullscreen"), "Fullscreen", &fullscreen, {})
+orui.tabs(orui.id("pages"), {"Home", "Settings"}, &page, {})
+orui.dropdown(orui.id("quality"), {"Low", "High"}, &quality, &quality_open, {})
+
+if orui.dialog(orui.id("confirm"), "Delete file?", "This cannot be undone.", &dialog_open, {}) == .Confirmed {
+    delete_file()
+}
+```
+
+All widget calls take an `ElementConfig` before any optional modifiers. Pass
+`{}` to use the theme and widget defaults.
+
+### button(id, text, config, ..modifiers)
+
+A focusable text button. It returns `true` for either a mouse click or
+keyboard/controller activation. Its default appearance uses the theme's
+normal, hover, active, focused, and disabled colors. Explicit colors in
+`config` override those theme defaults.
+
+```odin
+if orui.button(orui.id("save"), "Save", {
+    width = orui.fixed(120),
+    height = orui.fixed(38),
+}) {
+    save()
+}
+```
+
+### slider(id, value, low, high, config, ..modifiers)
+
+A horizontal slider with a mouse-captured handle. `value` is clamped to the
+provided range. When focused, left/right keys, D-pad, and left-stick
+navigation adjust the value instead of moving focus.
+
+```odin
+if orui.slider(orui.id("volume"), &volume, 0, 1, {}) {
+    audio_set_volume(volume)
+}
+```
+
+### checkbox(id, text, checked, config, ..modifiers)
+
+A focusable row containing a checkbox and label. It returns `true` when the
+checked state changes. The checked state is rendered using the theme's
+`selected` color.
+
+```odin
+if orui.checkbox(orui.id("fullscreen"), "Fullscreen", &fullscreen, {}) {
+    set_fullscreen(fullscreen)
+}
+```
+
+### tabs(id, labels, selected, config)
+
+Creates a row of mutually exclusive, focusable buttons. `selected` is the
+selected label index and the procedure returns `true` when it changes.
+
+```odin
+if orui.tabs(orui.id("pages"), {"Library", "Settings"}, &page, {}) {
+    reload_page(page)
+}
+```
+
+### dropdown(id, options, selected, open, config)
+
+Creates a button and a relatively anchored popup list. It supports keyboard
+and controller activation, click-outside closing, and Escape/controller-B
+closing.
+
+```odin
+if orui.dropdown(
+    orui.id("quality"),
+    {"Low", "Medium", "High"},
+    &quality,
+    &quality_open,
+    {},
+) {
+    set_quality(quality)
+}
+```
+
+### dialog(id, title, message, open, config)
+
+Creates a centered application-rendered modal with a backdrop, Cancel button,
+and OK button. It returns `DialogResult.None`, `.Confirmed`, or `.Cancelled`.
+The caller owns the `open` state; the dialog sets it to `false` after a button
+or Escape/controller-B result.
+
+```odin
+switch orui.dialog(
+    orui.id("confirm"),
+    "Delete file?",
+    "This cannot be undone.",
+    &dialog_open,
+    {},
+) {
+case .Confirmed:
+    delete_file()
+case .Cancelled:
+    log_cancel()
+}
+```
+
+Widgets are compositions of normal orui elements rather than separate
+retained objects: buttons are labels, checkboxes are containers with child
+labels, sliders contain a track and handle, and dialogs contain a backdrop,
+panel, labels, and buttons.
+
+## Theme and visual states
+
+Themes are stored per `Context` rather than globally. This allows multiple UI
+contexts to use different styles and keeps theme state isolated in tests and
+separate screens.
+
+```odin
+Theme :: struct {
+    button_background: rl.Color,
+    button_hover:      rl.Color,
+    button_active:     rl.Color,
+    button_focused:    rl.Color,
+    button_disabled:   rl.Color,
+    selected:          rl.Color,
+    track:             rl.Color,
+    handle:            rl.Color,
+    text:              rl.Color,
+    text_disabled:     rl.Color,
+    border:            rl.Color,
+    focus_border:      rl.Color,
+    dialog_backdrop:   rl.Color,
+}
+```
+
+`orui.init(ctx)` installs `default_theme()`. Customize a copy and assign it
+to the context:
+
+```odin
+theme := orui.default_theme()
+theme.button_background = {35, 45, 60, 255}
+theme.selected = {40, 120, 170, 255}
+theme.focus_border = {255, 220, 100, 255}
+orui.set_theme(ctx, theme)
+```
+
+The theme supplies defaults for built-in widgets. An explicit value in an
+`ElementConfig` takes precedence. For example, setting
+`background_color = rl.RED` prevents a button from selecting its theme
+background for hover/focus states. This keeps custom controls possible while
+making the default widgets consistent.
+
+The built-in widgets use these states:
+
+- **Hovered**: pointer is over the element.
+- **Active**: pointer button is held on the element.
+- **Focused**: element is the keyboard/controller focus target.
+- **Disabled**: element is skipped by input and navigation.
+- **Selected**: used by checkboxes, tabs, dropdown options, and selected UI.
+
+For custom elements, use `hovered()`, `active()`, `focused()`,
+`is_disabled(id)`, and your own selected state to resolve styles.
+
+## Responsive scaling
+
+`begin_responsive` uses a design viewport to scale declarative UI values for
+different window sizes. The default design viewport is `1280x800`, which
+matches the Steam Deck's logical resolution:
+
+```odin
+orui.begin_responsive(ctx, rl.GetScreenWidth(), rl.GetScreenHeight())
+```
+
+The scale is calculated as:
+
+```text
+min(actual_width / design_width, actual_height / design_height)
+```
+
+A custom design viewport can be supplied:
+
+```odin
+orui.begin_responsive(ctx, width, height, 1280, 800)
+```
+
+The input-injection equivalent is:
+
+```odin
+orui.begin_responsive_with_input(ctx, width, height, input, 1280, 800)
+```
+
+The responsive transform applies to declarative fixed values including:
+
+- Fixed widths and heights
+- Minimum and maximum sizes
+- Padding, margin, borders, and gaps
+- Corner radii
+- Absolute and relative positions
+- Manual clip rectangles
+- Font sizes and letter spacing
+- Grid track sizes
+
+Percent, fit, and grow sizes keep their normal layout behavior. Runtime scroll
+offsets are not rescaled because they are already stored in viewport pixels.
+The original `begin(...)` API remains available and uses a scale of `1`.
+
+The current renderer and scissor commands use logical screen coordinates. For
+that reason, the catalog example does not enable Raylib's
+`.WINDOW_HIGHDPI` flag. If an application enables HighDPI rendering, it must
+also convert orui's logical clip rectangles to the physical render surface
+when issuing scissor commands.
+
 ## Other functions
 
 ### hovered()
@@ -380,9 +769,29 @@ if orui.clicked("label") {
 }
 ```
 
+### activated()
+
+Returns true when the current element was activated by Enter, Space, or the
+controller's `South` button. Unlike `clicked()`, activation does not require
+pointer input.
+
+```odin
+if orui.activated() {
+    submit_form()
+}
+```
+
+The ID overloads are also available:
+
+```odin
+if orui.activated("submit") {
+    submit_form()
+}
+```
+
 ### focused()
 
-Returns true if the text input element is currently focused (active and receiving keyboard input).
+Returns true if the current element is currently focused and receives keyboard/controller input.
 
 Only one element can be focused at a time.
 
@@ -393,6 +802,17 @@ You can ask about a specific element by passing in the ID:
 ```odin
 if orui.focused("input element") {
   // is focused
+}
+```
+
+### is_disabled(id)
+
+Returns the resolved disabled state of an element from the previous frame.
+This is useful when custom widgets need to choose their disabled appearance.
+
+```odin
+if orui.is_disabled(orui.to_id("save")) {
+    // draw the disabled state
 }
 ```
 
@@ -886,6 +1306,11 @@ InheritedBool :: enum {
 	True,
 }
 ```
+
+Set `focusable = true` for custom controls that should participate in Tab,
+arrow-key, D-pad, or left-stick navigation. Set `adjustable = true` when a
+control should receive directional navigation instead of moving focus; the
+built-in slider uses this behavior.
 
 Cursor hint: the element's desired pointer cursor. It inherits from the parent by default, so a button container can set `.Pointing_Hand` and its label and icon will use the same suggestion. Set `.Unspecified` to override an inherited cursor with no opinion.
 

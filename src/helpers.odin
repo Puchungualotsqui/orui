@@ -179,17 +179,35 @@ clicked :: proc {
 @(private)
 // Whether the current element has been clicked this frame.
 _clicked :: proc() -> bool {
-	return rl.IsMouseButtonReleased(.LEFT) && active()
+	return current_context.input.mouse_left_released && active()
 }
 
 @(private)
 _clicked_string :: proc(id: string) -> bool {
-	return rl.IsMouseButtonReleased(.LEFT) && active(id)
+	return current_context.input.mouse_left_released && active(id)
 }
 
 @(private)
 _clicked_id :: proc(id: Id) -> bool {
-	return rl.IsMouseButtonReleased(.LEFT) && active(id)
+	return current_context.input.mouse_left_released && active(id)
+}
+
+activated :: proc {
+	_activated,
+	_activated_string,
+	_activated_id,
+}
+
+_activated :: proc() -> bool {
+	return current_context.activated_id == current_context.current_id
+}
+
+_activated_string :: proc(id: string) -> bool {
+	return current_context.activated_id == to_id(id)
+}
+
+_activated_id :: proc(id: Id) -> bool {
+	return current_context.activated_id == id
 }
 
 focused :: proc {
@@ -199,7 +217,7 @@ focused :: proc {
 }
 
 @(private)
-// Whether the current text input element is focused (receiving keyboard input).
+// Whether the current element is focused for keyboard/controller input.
 // Only one element can be focused at a time.
 _focused :: proc() -> bool {
 	ctx := current_context
@@ -207,7 +225,7 @@ _focused :: proc() -> bool {
 }
 
 @(private)
-// Whether the specified text input element is focused (receiving keyboard input).
+// Whether the specified element is focused for keyboard/controller input.
 // Only one element can be focused at a time.
 _focused_string :: proc(id: string) -> bool {
 	ctx := current_context
@@ -219,6 +237,56 @@ _focused_string :: proc(id: string) -> bool {
 _focused_id :: proc(id: Id) -> bool {
 	ctx := current_context
 	return ctx.focus_id == id
+}
+
+is_disabled :: proc(id: Id) -> bool {
+	element := get_element(id)
+	return element != nil && element.disabled == .True
+}
+
+shortcut_down :: proc(key: rl.KeyboardKey) -> bool {
+	return key_down(current_context, key)
+}
+
+shortcut_pressed :: proc(key: rl.KeyboardKey) -> bool {
+	return key_pressed(current_context, key)
+}
+
+back_pressed :: proc() -> bool {
+	return current_context.back_requested
+}
+
+consume_back :: proc() -> bool {
+	was_requested := current_context.back_requested
+	current_context.back_requested = false
+	return was_requested
+}
+
+set_focus :: proc(ctx: ^Context, id: Id) {
+	ctx.requested_focus_id = id
+	ctx.focus_id = id
+	ctx.focus = 0
+}
+
+set_focus_string :: proc(ctx: ^Context, id: string) {
+	set_focus(ctx, to_id(id))
+}
+
+activate :: proc(ctx: ^Context, id: Id) {
+	ctx.requested_activation_id = id
+	ctx.activated_id = id
+}
+
+activate_string :: proc(ctx: ^Context, id: string) {
+	activate(ctx, to_id(id))
+}
+
+ui_scale :: proc(ctx: ^Context) -> f32 {
+	return ctx.scale > 0 ? ctx.scale : 1
+}
+
+scale_value :: proc(value: f32) -> f32 {
+	return value * ui_scale(current_context)
 }
 
 captured :: proc {
