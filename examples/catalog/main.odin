@@ -1,6 +1,6 @@
 package catalog
 
-import orui "../../src"
+import orui "../../"
 import "core:fmt"
 
 import "core:path/filepath"

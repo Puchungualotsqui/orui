@@ -1,6 +1,6 @@
 package new_features
 
-import orui "../../src"
+import orui "../../"
 import "core:fmt"
 import "core:log"
 import "core:os"
