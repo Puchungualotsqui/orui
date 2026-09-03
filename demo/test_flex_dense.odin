@@ -1,6 +1,6 @@
 package demo
 
-import orui "../src"
+import orui "../"
 import rl "vendor:raylib"
 
 render_test_flex_dense :: proc() {

@@ -1,6 +1,6 @@
 package orui_test
 
-import orui "../src"
+import orui "../"
 import "core:strings"
 import "core:testing"
 

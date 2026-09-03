@@ -1,6 +1,6 @@
 package orui_test
 
-import orui "../src"
+import orui "../"
 import "core:testing"
 import rl "vendor:raylib"
 

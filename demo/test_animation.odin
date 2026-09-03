@@ -1,6 +1,6 @@
 package demo
 
-import orui "../src"
+import orui "../"
 import "core:math/ease"
 import "core:strings"
 import rl "vendor:raylib"

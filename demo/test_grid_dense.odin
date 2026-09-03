@@ -1,6 +1,6 @@
 package demo
 
-import orui "../src"
+import orui "../"
 import rl "vendor:raylib"
 
 GRID_DENSE_SIZE :: 80

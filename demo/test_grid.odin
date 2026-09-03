@@ -1,6 +1,6 @@
 package demo
 
-import orui "../src"
+import orui "../"
 import rl "vendor:raylib"
 
 cell_style :: proc(element: ^orui.Element) {
