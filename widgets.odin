@@ -137,8 +137,12 @@ scrollbar :: proc(
 	loc := #caller_location,
 ) {
 	ctx := current_context
-	background_id := to_id(parent, (index * 2) + 1)
-	handle_id := to_id(parent, (index * 2) + 2)
+	// Keep scrollbar IDs in their own namespace. Virtual-list items use
+	// to_id(parent, item_index + 1), so deriving scrollbar IDs directly from
+	// parent would collide with row 0/row 1 and corrupt their layout state.
+	scrollbar_namespace := to_id("orui scrollbar", int(parent))
+	background_id := to_id(scrollbar_namespace, (index * 2) + 1)
+	handle_id := to_id(scrollbar_namespace, (index * 2) + 2)
 
 	// scrollbar background
 	background_element, background_parent := begin_element(id(background_id), loc)
@@ -150,6 +154,20 @@ scrollbar :: proc(
 	scroll_percent, handle_percent := scrollbar_handle_params(parent)
 	background_size := size(background_id)
 	handle_size := handle_percent * background_size
+	if ctx.input_trace {
+		log.infof(
+			"[orui scrollbar] parent=%v track=(%.1f, %.1f) percent=(%.3f, %.3f) handle=(%.1f, %.1f) handle_percent=(%.3f, %.3f)",
+			parent,
+			background_size.x,
+			background_size.y,
+			scroll_percent.x,
+			scroll_percent.y,
+			handle_size.x,
+			handle_size.y,
+			handle_percent.x,
+			handle_percent.y,
+		)
+	}
 
 	// scrollbar handle
 	handle_element, handle_parent := begin_element(id(handle_id), loc)

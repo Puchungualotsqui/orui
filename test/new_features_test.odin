@@ -60,6 +60,22 @@ virtual_list_declares_only_visible_rows_after_measurement :: proc(t: ^testing.T)
 }
 
 @(test)
+scrollbar_ids_do_not_overlap_virtual_rows :: proc(t: ^testing.T) {
+	parent := orui.to_id("scroll parent")
+	scrollbar_namespace := orui.to_id("orui scrollbar", int(parent))
+	background_id := orui.to_id(scrollbar_namespace, 1)
+	handle_id := orui.to_id(scrollbar_namespace, 2)
+
+	row_zero := orui.virtual_list_item_id(parent, 0)
+	row_one := orui.virtual_list_item_id(parent, 1)
+
+	testing.expect(t, background_id != row_zero)
+	testing.expect(t, background_id != row_one)
+	testing.expect(t, handle_id != row_zero)
+	testing.expect(t, handle_id != row_one)
+}
+
+@(test)
 primary_touch_pointer_drives_legacy_mouse_fields :: proc(t: ^testing.T) {
 	ctx := new(orui.Context)
 	defer free(ctx)

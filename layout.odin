@@ -1,5 +1,7 @@
 package orui
 
+import "core:log"
+
 @(private)
 compute_layout :: proc(ctx: ^Context, index: i32) {
 	elements := &ctx.elements[current_buffer(ctx)]
@@ -72,7 +74,27 @@ compute_position :: proc(ctx: ^Context, element: ^Element) {
 	// content offset. Ordinary absolute children intentionally remain fixed so
 	// popups and decorations do not unexpectedly scroll.
 	if element.virtual_item.enabled && placement_parent._virtualized {
-		element._position -= get_scroll_offset(placement_parent)
+		scroll_offset := get_scroll_offset(placement_parent)
+		element._position -= scroll_offset
+		if ctx.input_trace {
+			log.infof(
+				"[orui virtual row] frame=%v id=%v index=%v parent=%v parent_pos=(%.1f, %.1f) parent_size=(%.1f, %.1f) scroll=(%.1f, %.1f) position=(%.1f, %.1f) size=(%.1f, %.1f)",
+				ctx.frame,
+				element.id,
+				element.virtual_item.index,
+				placement_parent.id,
+				placement_parent._position.x,
+				placement_parent._position.y,
+				placement_parent._size.x,
+				placement_parent._size.y,
+				scroll_offset.x,
+				scroll_offset.y,
+				element._position.x,
+				element._position.y,
+				element._size.x,
+				element._size.y,
+			)
+		}
 	}
 
 	if element.scroll.direction != .None {

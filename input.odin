@@ -509,11 +509,16 @@ move_focus_linear :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element, direc
 		for i: i32 = 1; i < count; i += 1 {
 			if elements[i].focusable && elements[i].disabled != .True &&
 			   (ctx.active_overlay_id == 0 || overlay_contains(elements, i, ctx.active_overlay_id)) {
-				ctx.focus = i
-				ctx.focus_id = elements[i].id
+				focus_element_and_reveal(ctx, elements, i)
 				return
 			}
 		}
+		return
+	}
+
+	// If the current row is at the edge of the materialized range, continue
+	// through the virtual list instead of wrapping to the first visible row.
+	if current_index >= 0 && focus_virtual_neighbor(ctx, elements, current_index, direction, false) {
 		return
 	}
 
@@ -528,8 +533,7 @@ move_focus_linear :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element, direc
 		item := &elements[candidate]
 		if item.focusable && item.disabled != .True &&
 		   (ctx.active_overlay_id == 0 || overlay_contains(elements, i32(candidate), ctx.active_overlay_id)) {
-			ctx.focus = i32(candidate)
-			ctx.focus_id = item.id
+			focus_element_and_reveal(ctx, elements, i32(candidate))
 			return
 		}
 	}
@@ -581,9 +585,112 @@ move_focus_direction :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element, di
 		}
 	}
 	if best >= 0 {
-		ctx.focus = best
-		ctx.focus_id = elements[best].id
+		focus_element_and_reveal(ctx, elements, best)
+	} else {
+		focus_virtual_neighbor(ctx, elements, current_index, int(direction), true)
 	}
+}
+
+@(private)
+// Assigns focus to an element and reveals it when it belongs to a virtual list.
+focus_element_and_reveal :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element, index: i32) {
+	ctx.focus = index
+	ctx.focus_id = elements[index].id
+
+	item := &elements[index]
+	if !item.virtual_item.enabled {
+		return
+	}
+
+	parent_index := item.parent
+	for parent_index > 0 {
+		parent := &elements[parent_index]
+		if parent._virtualized {
+			scroll_to_item(parent.id, item.virtual_item.index, .Nearest)
+			return
+		}
+		parent_index = parent.parent
+	}
+}
+
+@(private)
+// Focuses the next virtual item when it is not currently materialized. The
+// target ID follows virtual_list_item_id, the stable ID helper exposed by the
+// virtual-list API.
+focus_virtual_neighbor :: proc(
+	ctx: ^Context,
+	elements: ^[MAX_ELEMENTS]Element,
+	current_index: i32,
+	direction: int,
+	spatial: bool,
+) -> bool {
+	if current_index <= 0 {
+		return false
+	}
+
+	current := &elements[current_index]
+	if !current.virtual_item.enabled {
+		return false
+	}
+
+	parent_index := current.parent
+	for parent_index > 0 {
+		parent := &elements[parent_index]
+		if !parent._virtualized {
+			parent_index = parent.parent
+			continue
+		}
+
+		delta: int
+		if spatial {
+			if parent._virtual_item_extent.y > 0 {
+				if direction == 3 { delta = -1 }
+				if direction == 4 { delta = 1 }
+			} else {
+				if direction == 1 { delta = -1 }
+				if direction == 2 { delta = 1 }
+			}
+		} else {
+			delta = direction > 0 ? 1 : -1
+		}
+		if delta == 0 {
+			return false
+		}
+
+		target_index := current.virtual_item.index + delta
+		wrapped := false
+		if target_index < 0 || target_index >= int(parent._virtual_item_count) {
+			// Tab navigation is cyclic, so wrap across the complete virtual
+			// range rather than wrapping only across the currently visible rows.
+			// Spatial arrow navigation intentionally stops at the list edge.
+			if spatial {
+				return false
+			}
+			wrapped = true
+			target_index = delta > 0 ? 0 : int(parent._virtual_item_count) - 1
+		}
+
+		// If another materialized item exists in this direction, normal focus
+		// navigation should select it instead of forcing a virtual jump. A
+		// wrapped Tab target deliberately skips this check.
+		if !wrapped {
+			for i: i32 = 1; i < ctx.element_count[previous_buffer(ctx)]; i += 1 {
+				candidate := &elements[i]
+				if candidate.virtual_item.enabled && candidate.parent == parent_index {
+					if (delta > 0 && candidate.virtual_item.index > current.virtual_item.index) ||
+					   (delta < 0 && candidate.virtual_item.index < current.virtual_item.index) {
+						return false
+					}
+				}
+			}
+		}
+
+		ctx.focus = 0
+		ctx.focus_id = virtual_list_item_id(parent.id, target_index)
+		scroll_to_item(parent.id, target_index, .Nearest)
+		return true
+	}
+	return false
 }
 
 @(private)

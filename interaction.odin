@@ -325,6 +325,23 @@ begin_virtual_list :: proc(
 	} else {
 		element._virtual_content_size = {extent * f32(max(list.item_count, 0)), max(element._size.y, 0)}
 	}
+	if ctx.input_trace {
+		log.infof(
+			"[orui virtual] frame=%v id=%v viewport=(%.1f, %.1f) content=(%.1f, %.1f) offset=(%.1f, %.1f) target=(%.1f, %.1f) range=[%v,%v)",
+			ctx.frame,
+			list_id,
+			element._size.x,
+			element._size.y,
+			element._virtual_content_size.x,
+			element._virtual_content_size.y,
+			scroll_offset.x,
+			scroll_offset.y,
+			element._scroll_target.x,
+			element._scroll_target.y,
+			first,
+			last,
+		)
+	}
 
 	return {
 		id = list_id,

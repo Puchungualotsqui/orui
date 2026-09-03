@@ -119,7 +119,7 @@ main :: proc() {
 	items := ITEMS
 	search := strings.builder_make()
 	defer strings.builder_destroy(&search)
-	selected := 0
+	selected := -1
 	menu_open := false
 	modal_open := false
 	status := "Touch, mouse, keyboard, or controller input"
@@ -152,8 +152,8 @@ main :: proc() {
 				visible_count += 1
 			}
 		}
-		if visible_count > 0 {
-			selected = clamp(selected, 0, visible_count - 1)
+		if visible_count > 0 && selected >= visible_count {
+			selected = visible_count - 1
 		}
 
 		{orui.container(orui.id("app"), {
@@ -209,38 +209,65 @@ main :: proc() {
 				font_size = 14, color = {170, 180, 195, 255},
 			})
 
-			list := orui.begin_virtual_list(orui.id("results"), {
-				width = orui.grow(), height = orui.grow(),
-				scroll = orui.scroll(.Vertical),
-				background_color = {24, 29, 39, 255},
-				padding = orui.padding(6),
-				clip = {.Self, {}},
-			}, {
-				direction = .Vertical,
-				item_count = visible_count,
-				item_extent = 52,
-				overscan = 2,
-			})
-			for row := list.first; row < list.last; row += 1 {
-				item_index := visible_items[row]
-				item := items[item_index]
-				row_color := row == selected ? theme.selected : theme.button_background
-				if orui.button(orui.id(orui.virtual_list_item_id(list.id, item_index)),
-					fmt.tprintf("%s    %s", item.name, item.status),
-					orui.virtual_list_item_config(list, row, {
-						width = orui.percent(1), height = orui.fixed(52),
-						padding = orui.padding(14, 8),
-						background_color = row_color,
-						border = orui.border(1),
-						border_color = row == selected ? theme.focus_border : theme.border,
-						color = theme.text,
-					})
-				) {
-					selected = row
-					status = fmt.tprintf("Selected %s", item.name)
+			{orui.container(orui.id("results viewport"), {
+					direction = .LeftToRight,
+					width = orui.grow(), height = orui.grow(),
+					position = {.Relative, {}},
+				})
+				list := orui.begin_virtual_list(orui.id("results"), {
+					width = orui.grow(), height = orui.grow(),
+					scroll = orui.scroll(.Vertical),
+					background_color = {24, 29, 39, 255},
+					padding = orui.padding(6),
+					clip = {.Self, {}},
+				}, {
+					direction = .Vertical,
+					item_count = visible_count,
+					item_extent = 52,
+					overscan = 2,
+				})
+				for row := list.first; row < list.last; row += 1 {
+					item_index := visible_items[row]
+					item := items[item_index]
+					row_id := orui.virtual_list_item_id(list.id, row)
+					row_selected := row == selected
+					row_focused := orui.focused(row_id)
+					row_color := row_selected ? theme.selected : row_focused ? theme.button_focused : theme.button_background
+					if orui.button(orui.id(row_id),
+						fmt.tprintf("%s    %s", item.name, item.status),
+						orui.virtual_list_item_config(list, row, {
+							width = orui.percent(1), height = orui.fixed(52),
+							padding = orui.padding(14, 8),
+							background_color = row_color,
+							border = orui.border(1),
+							border_color = row_focused ? theme.focus_border : theme.border,
+							color = theme.text,
+						})
+					) {
+						selected = row
+						status = fmt.tprintf("Selected %s", item.name)
+					}
 				}
+				orui.end_virtual_list()
+
+				orui.scrollbar(
+					orui.id("results"),
+					{
+						position = {.Absolute, {-5, 0}},
+						placement = orui.placement(.Right, .Right),
+						width = orui.fixed(theme.metrics.scrollbar_width),
+						height = orui.grow(),
+						margin = orui.margin(2, 18),
+						background_color = theme.track,
+					},
+					{
+						direction = .TopToBottom,
+						width = orui.percent(1),
+						background_color = theme.handle,
+						corner_radius = orui.corner(4),
+					},
+				)
 			}
-			orui.end_virtual_list()
 		}
 
 		if menu_open && orui.begin_popup(orui.id("menu popup"), true, {
