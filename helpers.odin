@@ -465,8 +465,8 @@ _set_scroll_offset :: proc(offset: rl.Vector2) {
 @(private)
 _set_scroll_offset_id :: proc(id: Id, offset: rl.Vector2) {
 	ctx := current_context
-	// Prefer the current tree for calls made while declaring a frame, but also
-	// support requests made before begin() by updating the previous tree.
+	// Keep runtime scroll state synchronized across both frame buffers. Calls
+	// may happen while declaring a frame or before the next frame begins.
 	for pass in 0 ..< 2 {
 		buffer := pass == 0 ? current_buffer(ctx) : previous_buffer(ctx)
 		elements := &ctx.elements[buffer]
@@ -476,7 +476,6 @@ _set_scroll_offset_id :: proc(id: Id, offset: rl.Vector2) {
 				elements[i].scroll.offset = offset
 				elements[i]._scroll_target = offset
 				elements[i]._scroll_velocity = {}
-				return
 			}
 		}
 	}

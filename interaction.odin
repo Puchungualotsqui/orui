@@ -493,6 +493,15 @@ theme_style_for :: proc(ctx: ^Context, role: StyleRole, id: Id, disabled: bool) 
 
 scroll_to_item :: proc(list_id: Id, index: int, alignment: ScrollAlignment = .Nearest) {
 	ctx := current_context
+	if ctx.input_trace {
+		log.infof(
+			"[orui scroll] item request frame=%v list_id=%v index=%v alignment=%v",
+			ctx.frame,
+			list_id,
+			index,
+			alignment,
+		)
+	}
 	for buffer in 0 ..< 2 {
 		count := ctx.element_count[buffer]
 		for i in 0 ..< count {
@@ -505,6 +514,7 @@ scroll_to_item :: proc(list_id: Id, index: int, alignment: ScrollAlignment = .Ne
 				top := f32(index) * element._virtual_item_extent.y
 				bottom := top + element._virtual_item_extent.y
 				offset := get_scroll_offset(element)
+				old_offset := offset
 				switch alignment {
 				case .Start:
 					offset.y = top
@@ -517,11 +527,26 @@ scroll_to_item :: proc(list_id: Id, index: int, alignment: ScrollAlignment = .Ne
 					if bottom > offset.y + viewport { offset.y = bottom - viewport }
 				}
 				_set_scroll_offset_id(list_id, offset)
+				if ctx.input_trace {
+					log.infof(
+						"[orui scroll] item vertical buffer=%v element=%v old=(%.1f,%.1f) new=(%.1f,%.1f) viewport=%.1f bounds=(%.1f,%.1f)",
+						buffer,
+						i,
+						old_offset.x,
+						old_offset.y,
+						offset.x,
+						offset.y,
+						viewport,
+						top,
+						bottom,
+					)
+				}
 			} else {
 				viewport := inner_width(element)
 				left := f32(index) * element._virtual_item_extent.x
 				right := left + element._virtual_item_extent.x
 				offset := get_scroll_offset(element)
+				old_offset := offset
 				switch alignment {
 				case .Start:
 					offset.x = left
@@ -534,9 +559,26 @@ scroll_to_item :: proc(list_id: Id, index: int, alignment: ScrollAlignment = .Ne
 					if right > offset.x + viewport { offset.x = right - viewport }
 				}
 				_set_scroll_offset_id(list_id, offset)
+				if ctx.input_trace {
+					log.infof(
+						"[orui scroll] item horizontal buffer=%v element=%v old=(%.1f,%.1f) new=(%.1f,%.1f) viewport=%.1f bounds=(%.1f,%.1f)",
+						buffer,
+						i,
+						old_offset.x,
+						old_offset.y,
+						offset.x,
+						offset.y,
+						viewport,
+						left,
+						right,
+					)
+				}
 			}
 			return
 		}
+	}
+	if ctx.input_trace {
+		log.infof("[orui scroll] item list not found frame=%v list_id=%v", ctx.frame, list_id)
 	}
 }
 

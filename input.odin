@@ -448,13 +448,30 @@ handle_focus_navigation :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element)
 		key_pressed(ctx, .ESCAPE) ||
 		controller_button_pressed(ctx.input, .East)
 
-		// Keyboard and controller navigation makes focus visible. Mouse focus is
-		// still assigned above, so applications can style both consistently.
+	// Keyboard and controller navigation makes focus visible. Mouse focus is
+	// still assigned above, so applications can style both consistently.
 	tab := key_pressed(ctx, .TAB)
 	shift := key_down(ctx, .LEFT_SHIFT) || key_down(ctx, .RIGHT_SHIFT)
 	ctx.navigation_direction = 0
 	if tab {
+		if ctx.input_trace {
+			log.infof(
+				"[orui focus] tab frame=%v direction=%v before_index=%v before_id=%v",
+				ctx.frame,
+				shift ? -1 : 1,
+				ctx.focus,
+				ctx.focus_id,
+			)
+		}
 		move_focus_linear(ctx, elements, shift ? -1 : 1)
+		if ctx.input_trace {
+			log.infof(
+				"[orui focus] tab result frame=%v after_index=%v after_id=%v",
+				ctx.frame,
+				ctx.focus,
+				ctx.focus_id,
+			)
+		}
 	} else {
 		direction: i8 = 0
 		axis_x := controller_axis(ctx.input, .Left_X)
@@ -503,6 +520,17 @@ move_focus_linear :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element, direc
 			current_index = i
 			break
 		}
+	}
+
+	if ctx.input_trace && key_pressed(ctx, .TAB) {
+		log.infof(
+			"[orui focus] linear frame=%v direction=%v count=%v current_index=%v current_id=%v",
+			ctx.frame,
+			direction,
+			count,
+			current_index,
+			ctx.focus_id,
+		)
 	}
 
 	if current_index < 0 {
@@ -596,6 +624,16 @@ move_focus_direction :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element, di
 focus_element_and_reveal :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element, index: i32) {
 	ctx.focus = index
 	ctx.focus_id = elements[index].id
+	if ctx.input_trace {
+		log.infof(
+			"[orui focus] assign frame=%v index=%v id=%v virtual=%v virtual_index=%v",
+			ctx.frame,
+			index,
+			elements[index].id,
+			elements[index].virtual_item.enabled,
+			elements[index].virtual_item.index,
+		)
+	}
 
 	item := &elements[index]
 	if !item.virtual_item.enabled {
@@ -606,6 +644,15 @@ focus_element_and_reveal :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element
 	for parent_index > 0 {
 		parent := &elements[parent_index]
 		if parent._virtualized {
+			if ctx.input_trace {
+				log.infof(
+					"[orui focus] reveal materialized frame=%v item_id=%v item_index=%v list_id=%v",
+					ctx.frame,
+					item.id,
+					item.virtual_item.index,
+					parent.id,
+				)
+			}
 			scroll_to_item(parent.id, item.virtual_item.index, .Nearest)
 			return
 		}
@@ -687,6 +734,20 @@ focus_virtual_neighbor :: proc(
 
 		ctx.focus = 0
 		ctx.focus_id = virtual_list_item_id(parent.id, target_index)
+		if ctx.input_trace {
+			log.infof(
+				"[orui focus] reveal virtual frame=%v current_item=%v list_id=%v virtual_count=%v offset=(%.1f,%.1f) target_item=%v target_id=%v wrapped=%v",
+				ctx.frame,
+				current.virtual_item.index,
+				parent.id,
+				parent._virtual_item_count,
+				get_scroll_offset(parent).x,
+				get_scroll_offset(parent).y,
+				target_index,
+				ctx.focus_id,
+				wrapped,
+			)
+		}
 		scroll_to_item(parent.id, target_index, .Nearest)
 		return true
 	}
@@ -1136,6 +1197,15 @@ sync_focus_element :: proc(ctx: ^Context) {
 
 	focus_index, ok := element_index_by_id(ctx, previous_buffer(ctx), ctx.focus_id)
 	if !ok {
+		if ctx.input_trace {
+			log.infof(
+				"[orui focus] sync lost focus frame=%v id=%v previous_buffer=%v element_count=%v",
+				ctx.frame,
+				ctx.focus_id,
+				previous_buffer(ctx),
+				ctx.element_count[previous_buffer(ctx)],
+			)
+		}
 		clear_focus(ctx)
 		return
 	}
