@@ -434,8 +434,9 @@ update_scroll_physics :: proc(ctx: ^Context, elements: ^[MAX_ELEMENTS]Element) {
 
 		min_x, max_x := scroll_bounds_x(element)
 		min_y, max_y := scroll_bounds_y(element)
-		if element._scroll_target == {} && element.scroll.offset != {} {
+		if !element._scroll_target_initialized {
 			element._scroll_target = element.scroll.offset
+			element._scroll_target_initialized = true
 		}
 		element._scroll_target.x = clamp(element._scroll_target.x, min_x, max_x)
 		element._scroll_target.y = clamp(element._scroll_target.y, min_y, max_y)
@@ -589,6 +590,7 @@ scroll_to_smooth :: proc(id: Id, offset: rl.Vector2) {
 		for i in 0 ..< count {
 			if ctx.elements[buffer][i].id == id {
 				ctx.elements[buffer][i]._scroll_target = offset
+				ctx.elements[buffer][i]._scroll_target_initialized = true
 				return
 			}
 		}

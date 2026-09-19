@@ -481,6 +481,7 @@ Element :: struct {
 	// scroll
 	scroll:            ScrollConfig,
 	_scroll_target:    rl.Vector2,
+	_scroll_target_initialized: bool,
 	_scroll_velocity:  rl.Vector2,
 	_scroll_dragging:  bool,
 	_scroll_drag_start: rl.Vector2,
@@ -650,6 +651,7 @@ configure_element :: proc(
 	element.scroll = config.scroll
 	if previous := get_element(element.id); previous != nil {
 		element._scroll_target = previous._scroll_target
+		element._scroll_target_initialized = previous._scroll_target_initialized
 		element._scroll_velocity = previous._scroll_velocity
 		element._scroll_dragging = previous._scroll_dragging
 		element._scroll_drag_start = previous._scroll_drag_start
@@ -657,6 +659,9 @@ configure_element :: proc(
 		if config.scroll.offset == {} {
 			element.scroll.offset = previous.scroll.offset
 		}
+	} else {
+		element._scroll_target = element.scroll.offset
+		element._scroll_target_initialized = true
 	}
 
 	element.custom_event = config.custom_event

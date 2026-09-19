@@ -475,6 +475,7 @@ _set_scroll_offset_id :: proc(id: Id, offset: rl.Vector2) {
 			if elements[i].id == id {
 				elements[i].scroll.offset = offset
 				elements[i]._scroll_target = offset
+				elements[i]._scroll_target_initialized = true
 				elements[i]._scroll_velocity = {}
 			}
 		}

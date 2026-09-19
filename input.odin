@@ -247,7 +247,14 @@ handle_input_state :: proc(ctx: ^Context) {
 
 		if !scroll_consumed {
 			if scroll.x != 0 && scrolls_x(element) {
-				old := get_scroll_offset(element).x
+				// Accumulate wheel input from the target, not the current
+				// visual offset. The latter lags while smooth scrolling is
+				// active and causes fast wheel input to be capped/lost.
+				if !element._scroll_target_initialized {
+					element._scroll_target = element.scroll.offset
+					element._scroll_target_initialized = true
+				}
+				old := element._scroll_target.x
 				element._scroll_target.x = old - scroll.x * SCROLL_FACTOR
 				min_x, max_x := scroll_bounds_x(element)
 				element._scroll_target.x = clamp(element._scroll_target.x, min_x, max_x)
@@ -256,7 +263,13 @@ handle_input_state :: proc(ctx: ^Context) {
 				}
 			}
 			if scroll.y != 0 && scrolls_y(element) {
-				old := get_scroll_offset(element).y
+				// Accumulate vertical wheel input from the target for the
+				// same reason as the horizontal path above.
+				if !element._scroll_target_initialized {
+					element._scroll_target = element.scroll.offset
+					element._scroll_target_initialized = true
+				}
+				old := element._scroll_target.y
 				element._scroll_target.y = old - scroll.y * SCROLL_FACTOR
 				min_y, max_y := scroll_bounds_y(element)
 				element._scroll_target.y = clamp(element._scroll_target.y, min_y, max_y)
@@ -294,6 +307,7 @@ handle_input_state :: proc(ctx: ^Context) {
 				scroll_offset.y = clamp(scroll_offset.y, min_y, max_y)
 				element.scroll.offset = scroll_offset
 				element._scroll_target = scroll_offset
+				element._scroll_target_initialized = true
 				element._scroll_last_pointer = position
 			}
 			if released { element._scroll_dragging = false }
