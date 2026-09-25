@@ -317,6 +317,14 @@ button :: proc(
 	if c.font_size == 0 {
 		c.font_size = 16
 	}
+	// Buttons are controls rather than plain labels, so center their text by
+	// default. Callers can still choose any non-default alignment.
+	if c.align == {.Start, .Start} {
+		c.align = {.Center, .Center}
+	}
+	if c.clip.type == .Inherit {
+		c.clip = {.Self, {}}
+	}
 	if c.height.type == .Fit {
 		c.height = fixed(max(ctx.theme.metrics.control_height, ctx.theme.metrics.touch_target))
 	}
